@@ -158,7 +158,10 @@ jobs:
 
       - name: Build desktop app (Linux, webkit2gtk 4.1)
         if: runner.os == 'Linux'
-        run: wails build -tags webkit_4_1
+        # Wails v2.15 build tag for webkit2gtk-4.1 (verified against the
+        # module source: `#cgo webkit2_41 pkg-config: webkit2gtk-4.1`).
+        # ubuntu-latest (24.04) no longer ships webkit2gtk-4.0.
+        run: wails build -tags webkit2_41
 
       - name: Build desktop app (Windows)
         if: runner.os == 'Windows'
