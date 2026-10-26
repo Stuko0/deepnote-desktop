@@ -1,0 +1,42 @@
+# local research artifacts (contain personal account screenshots/data)
+research/
+
+# dependencies and build output
+node_modules/
+dist/
+build/
+frontend/dist/
+sidecar/dist/
+bin/
+*.testdist/
+
+# go
+internal/frontend/wailsjs/generated/
+*.exe
+*.syso
+
+# sidecar compiled binaries
+cmd/sidecar/sidecar-*
+!cmd/sidecar/*.ts
+
+# env and secrets
+.env
+.env.*
+*.pem
+*.key
+DEEPNOTE_TOKEN
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# editors and os
+.vscode/
+.idea/
+.DS_Store
+
+# logs and temp
+*.log
+tmp/
+.cache/
