@@ -43,6 +43,14 @@ jobs:
       - name: Build sidecar (smoke)
         run: pnpm build:sidecar
 
+      # main.go embeds frontend/dist; the checks job does not build the
+      # frontend, and go:embed fails on a missing directory.
+      - name: Prepare embed placeholder
+        shell: bash
+        run: |
+          mkdir -p frontend/dist
+          echo "<!-- placeholder for go:embed -->" > frontend/dist/index.html
+
       - name: Go build
         run: go build ./...
 
@@ -148,7 +156,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
 
-      - name: Build desktop app
+      - name: Build desktop app (Linux, webkit2gtk 4.1)
+        if: runner.os == 'Linux'
+        run: wails build -tags webkit_4_1
+
+      - name: Build desktop app (Windows)
+        if: runner.os == 'Windows'
         run: wails build
 
       - name: Upload binary
