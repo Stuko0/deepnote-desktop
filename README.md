@@ -84,13 +84,13 @@ Prerequisites: Go 1.22+, Node 22, pnpm (via corepack), Python 3.10+ with `pip in
 ```
 git clone https://github.com/Stuko0/deepnote-desktop.git
 cd deepnote-desktop
-pnpm install
+pnpm install --config.strict-dep-builds=false
 pnpm build:sidecar
 pnpm build:frontend
 wails build          # produces build/bin/deepnote-desktop
 ```
 
-For development with hot reload, run `pnpm build:sidecar` once and then `wails dev`. The shell locates the sidecar at `sidecar/dist/index.js`; override with `DND_ROOT` if your layout differs. Point the app (or `?project=` in a browser) at a `.deepnote` file; Python resolution follows `DEEPNOTE_PYTHON`, then the project `.venv`.
+For development with hot reload, run `pnpm build:sidecar` once and then `wails dev`. The shell locates the sidecar at `sidecar/dist/index.js`; override with `DND_ROOT` if your layout differs. Point the app (or `?project=` in a browser) at a `.deepnote` file; Python resolution follows `DEEPNOTE_PYTHON`, then the project `.venv`. The install flag above is required: pnpm 12 aborts on the skipped build scripts of esbuild/biome (their platform binaries ship via optional dependencies, so nothing is lost).
 
 ## Testing
 
