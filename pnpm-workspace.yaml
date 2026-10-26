@@ -1,0 +1,7 @@
+packages:
+  - sidecar
+  - frontend
+  - e2e
+
+onlyBuiltDependencies:
+  - esbuild

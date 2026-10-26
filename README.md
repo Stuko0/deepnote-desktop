@@ -6,7 +6,13 @@ A local-first desktop application (Linux and Windows) for creating, editing, and
 
 ## Status
 
-Pre-alpha. The repository currently holds the development plan, architecture decisions, and research artifacts used to design the product. The first executable milestone is Phase 0 (see ROADMAP). Do not expect a working installer yet.
+Pre-alpha. Phases 0 and 1 of the roadmap are implemented and verified end to end:
+
+- The sidecar opens `.deepnote` projects, starts a local Jupyter kernel through `deepnote-toolkit`, streams block outputs over WebSocket, and persists execution snapshots.
+- The desktop shell (Wails) supervises the sidecar and embeds the UI.
+- Verified locally with unit tests, integration tests against a real kernel, and a Playwright end-to-end test (open project, run notebook, streamed outputs render). The second run against a warm kernel completes in tens of milliseconds.
+
+There is no installer yet; build from source (see Development).
 
 ## Why
 
@@ -43,7 +49,7 @@ Deepnote open-sourced its core (notebook format, runtime, CLI, cloud client, MCP
 
 Design notes:
 
-- The reusable core is TypeScript on Node. Wails does not embed Node, so a Bun-compiled sidecar hosts the execution engine and exposes a versioned local protocol (HTTP + WebSocket) to the UI. This mirrors how Deepnote ships its own CLI (`bun build --compile`).
+- The reusable core is TypeScript on Node. Wails does not embed Node, so a sidecar process hosts the execution engine and exposes a versioned local protocol (HTTP + WebSocket, loopback + session token) to the UI. Bun compilation remains a packaging option for a single-binary sidecar (it mirrors how Deepnote ships its CLI).
 - The sidecar is the single writer of notebook state; the UI applies optimistic updates and reconciles per block version.
 - The `.deepnote` file on disk is the source of truth. Outputs are stored in execution snapshots, following the upstream snapshot format.
 - The frontend and sidecar are shell-agnostic: a future migration to Tauri or Electron touches only the host layer.
@@ -53,7 +59,7 @@ See `PLAN.md` (Spanish) for the full development plan: patterns, optimizations, 
 ## Tech stack
 
 - Shell: Go with Wails v2
-- Sidecar: TypeScript on Bun, reusing the `@deepnote/*` packages
+- Sidecar: TypeScript on Node.js, reusing the `@deepnote/*` packages
 - Frontend: React 18, Chakra UI, Monaco, xterm.js, Vega-Lite, Zustand
 - Runtime: Python 3.10+ with `deepnote-toolkit[server]`
 - Testing: Vitest, Playwright, Go testing
@@ -73,22 +79,27 @@ docs/            architecture and protocol documentation
 
 ## Development
 
-Prerequisites: Go 1.22+, Node 22, pnpm, Bun, Python 3.10+ with `pip install "deepnote-toolkit[server]"`.
+Prerequisites: Go 1.22+, Node 22, pnpm (via corepack), Python 3.10+ with `pip install "deepnote-toolkit[server]"` in a virtualenv.
 
 ```
 git clone https://github.com/Stuko0/deepnote-desktop.git
 cd deepnote-desktop
-# Phase 0 scaffold instructions will live here
+pnpm install
+pnpm build:sidecar
+pnpm build:frontend
+wails build          # produces build/bin/deepnote-desktop
 ```
+
+For development with hot reload, run `pnpm build:sidecar` once and then `wails dev`. The shell locates the sidecar at `sidecar/dist/index.js`; override with `DND_ROOT` if your layout differs. Point the app (or `?project=` in a browser) at a `.deepnote` file; Python resolution follows `DEEPNOTE_PYTHON`, then the project `.venv`.
 
 ## Testing
 
-- `pnpm test` runs unit tests (Vitest) for the sidecar domain and frontend.
-- `pnpm test:integration` runs against a real `deepnote-toolkit` server (Linux CI only).
-- Playwright end-to-end tests exercise the UI against the local sidecar, including visual regression screenshots.
-- Smoke tests launch the compiled binary on both Ubuntu and Windows.
+- `pnpm test` runs unit tests (Vitest) for the sidecar domain: protocol validation and `.deepnote` parsing against golden fixtures.
+- `pnpm test:integration` starts a real `deepnote-toolkit` server and executes the fixture notebook over the WebSocket protocol (requires `DEEPNOTE_PYTHON`).
+- `pnpm test:e2e` drives the built UI with Playwright against the built sidecar and a real kernel.
+- `pnpm biome:check` lints the TypeScript codebase.
 
-All CI jobs run on Ubuntu and Windows.
+CI runs lint, typecheck, unit tests, integration tests, the Playwright suite, and desktop builds on both Ubuntu and Windows.
 
 ## Roadmap
 

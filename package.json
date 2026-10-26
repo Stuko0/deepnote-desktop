@@ -1,0 +1,25 @@
+{
+  "name": "deepnote-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first desktop application for Deepnote notebooks (Linux and Windows).",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@12.15.0",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "scripts": {
+    "dev:sidecar": "pnpm --filter @deepnote-desktop/sidecar dev",
+    "build:sidecar": "pnpm --filter @deepnote-desktop/sidecar build",
+    "build:frontend": "pnpm --filter @deepnote-desktop/frontend build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:integration": "pnpm --filter @deepnote-desktop/sidecar test:integration",
+    "biome:check": "biome check .",
+    "biome:fix": "biome check --write .",
+    "test:e2e": "pnpm --filter @deepnote-desktop/e2e test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4"
+  }
+}

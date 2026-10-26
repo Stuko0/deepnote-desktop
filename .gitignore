@@ -11,6 +11,7 @@ bin/
 *.testdist/
 
 # go
+build/bin/
 internal/frontend/wailsjs/generated/
 *.exe
 *.syso
@@ -40,3 +41,13 @@ __pycache__/
 *.log
 tmp/
 .cache/
+
+# execution snapshots produced by tests and local runs
+test-fixtures/snapshots/
+
+# test artifacts
+e2e/test-results/
+e2e/playwright-report/
+
+# go build output in repo root
+/deepnote-desktop

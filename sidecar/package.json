@@ -1,0 +1,34 @@
+{
+  "name": "@deepnote-desktop/sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local execution sidecar: hosts the Deepnote execution engine and exposes a versioned local protocol (HTTP + WebSocket) on loopback.",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@deepnote/blocks": "^4.8.1",
+    "@deepnote/convert": "^4.0.3",
+    "@deepnote/reactivity": "^1.2.4",
+    "@deepnote/runtime-core": "^0.7.0",
+    "ws": "^8.18.0",
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  }
+}
