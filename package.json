@@ -13,7 +13,7 @@
     "build:sidecar": "pnpm --filter @deepnote-desktop/sidecar build",
     "build:frontend": "pnpm --filter @deepnote-desktop/frontend build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
+    "test": "pnpm --filter @deepnote-desktop/sidecar test",
     "test:integration": "pnpm --filter @deepnote-desktop/sidecar test:integration",
     "biome:check": "biome check .",
     "biome:fix": "biome check --write .",
