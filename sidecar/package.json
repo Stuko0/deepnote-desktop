@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@deepnote/blocks": "^4.8.1",
+    "@deepnote/cloud": "^0.2.1",
     "@deepnote/convert": "^4.0.3",
     "@deepnote/reactivity": "^1.2.4",
     "@deepnote/runtime-core": "^0.7.0",

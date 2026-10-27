@@ -61,6 +61,11 @@ export class SessionManager {
   /** Integration secrets (env vars) held in memory for the next engine start. */
   private secrets = new Map<string, string>();
 
+  /** Environment for cloud calls: session secrets take precedence over process env. */
+  cloudEnv(): Record<string, string | undefined> {
+    return { ...process.env, ...Object.fromEntries(this.secrets) };
+  }
+
   constructor(private readonly emit: Emit) {}
 
   get isOpen(): boolean {
@@ -404,9 +409,6 @@ export class SessionManager {
       }
     }
 
-    console.error(
-      `[run] start (${options.blockIds ? options.blockIds.length + ' blocks' : 'all'})`,
-    );
     this.running = true;
     this.abort = new AbortController();
     const startedAt = new Date().toISOString();
@@ -431,6 +433,9 @@ export class SessionManager {
         },
         onOutput: (blockId, output) => {
           this.emit({ v: 1, type: 'exec:output', payload: { blockId, output } });
+        },
+        onAgentEvent: (event) => {
+          this.emit({ v: 1, type: 'agent:event', payload: { event } });
         },
         onBlockDone: (result) => {
           const existing = collected.get(result.blockId);
@@ -493,7 +498,6 @@ export class SessionManager {
       });
       this.setKernelState(isRuntimeError(error) ? 'error' : 'ready');
     } finally {
-      console.error('[run] end');
       this.running = false;
       this.abort = null;
     }

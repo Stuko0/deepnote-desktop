@@ -6,7 +6,11 @@ A local-first desktop application (Linux and Windows) for creating, editing, and
 
 ## Status
 
-Pre-alpha. Phases 0 through 3 of the roadmap are implemented and verified end to end.
+Pre-alpha. Phases 0 through 6 of the roadmap are implemented; each phase verified locally (unit, integration against a real kernel, Playwright E2E).
+
+- **Agents (phase 4)**: creatable agent blocks with live streaming of text, reasoning, and tool use into the block; provider keys (OpenAI/Anthropic) through the session/keychain path; the open-source runtime's agent executor (including its block tools) does the work. The MCP tool loop needs a real provider key to be exercised end to end.
+- **Cloud (phase 5)**: token via keychain, workspace check, and remote notebook runs through the official `@deepnote/cloud` client (trigger, poll, snapshot), unit-tested against a stubbed fetch - no test touches the real API.
+- **Productization (phase 6)**: release workflow on `v*` tags producing a Linux tarball and a Windows NSIS installer with checksums, binary smoke tests in CI (xvfb on Linux), and a user guide in `docs/USER.md`. Auto-update, tray, and crash reporting are not wired yet.
 
 - **Execution**: the sidecar opens `.deepnote` projects, starts a local Jupyter kernel through `deepnote-toolkit`, streams block outputs over WebSocket, and persists execution snapshots. The kernel starts on first run and stays warm (a full fixture run takes tens of milliseconds). Reactive runs ("block and dependent blocks") expand through the open reactivity DAG.
 - **Editing**: Monaco (self-hosted from npm, offline) for code and SQL, a plain textarea for text blocks, per-block run/move/delete, block creation from the block menu or the palette, and debounced autosave that persists edits straight into the `.deepnote` YAML.

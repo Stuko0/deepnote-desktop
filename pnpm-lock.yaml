@@ -257,6 +257,9 @@ importers:
       '@deepnote/blocks':
         specifier: ^4.8.1
         version: 4.8.1
+      '@deepnote/cloud':
+        specifier: ^0.2.1
+        version: 0.2.1
       '@deepnote/convert':
         specifier: ^4.0.3
         version: 4.0.3
@@ -520,10 +523,17 @@ packages:
     resolution: {integrity: sha512-RWNTvZ4bar31IQ/tSqF2zUwJUCd+KJneZeyHrcixv559t6+WVQweziJUlw2etguTkOxhn7Zmj+MO+/OJkVYk/Q==}
     engines: {node: '>=22.14.0', pnpm: '>=10.17.1'}
 
+  '@deepnote/cloud@0.2.1':
+    resolution: {integrity: sha512-o01TEAQ2LxA4/ulWK+9onsqLdd6d9EwLIlD3oMeSLAqH2b+eYSmnbsLWgnFQ5fUpYTpPtinlVlui5pu/LbF3lA==}
+    engines: {node: '>=22.14.0', pnpm: '>=10.17.1'}
+
   '@deepnote/convert@4.0.3':
     resolution: {integrity: sha512-uEZxxrUAL4vNrlHdwSV7hOUgdcTMFHJqv1xWmrb8e2QtTpxL1YTACvAkT0ptRxpQN0Km6vagzLMqkNuiJRo21A==}
     engines: {node: '>=22.14.0', pnpm: '>=10.17.1'}
     hasBin: true
+
+  '@deepnote/database-integrations@1.7.1':
+    resolution: {integrity: sha512-GbW+wibPjAd2/1fMOu4PlPdjfCu+aOoUWY6m6aHwCXmexutCoPN5H0U7RcxJB2qiafkEMUmtDwdSvxTqkbvFkA==}
 
   '@deepnote/reactivity@1.2.4':
     resolution: {integrity: sha512-nH7iSBSVUCo5xQXDwsor0Byu+D11Uc+8cO9lA5iIhZBtE8AKoPFnA5bMnqscWS5p3phiyrDrxJ35yGFCtkK4TA==}
@@ -1657,6 +1667,9 @@ packages:
       picomatch:
         optional: true
 
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
+
   find-root@1.1.0:
     resolution: {integrity: sha512-NKfW6bec6GfKc0SGx1e07QZY9PE99u0Bft/0rzSD5k3sO/vwkVUpDUKVm5Gpp5Ue3YfShPFTX2070tDs5kB9Ng==}
 
@@ -2635,6 +2648,12 @@ snapshots:
       yaml: 2.9.1
       zod: 3.25.76
 
+  '@deepnote/cloud@0.2.1':
+    dependencies:
+      '@deepnote/database-integrations': 1.7.1
+      fflate: 0.8.3
+      zod: 3.25.76
+
   '@deepnote/convert@4.0.3':
     dependencies:
       '@deepnote/blocks': 4.8.1
@@ -2642,6 +2661,12 @@ snapshots:
       cleye: 2.7.0
       ora: 9.4.1
       yaml: 2.9.1
+
+  '@deepnote/database-integrations@1.7.1':
+    dependencies:
+      '@deepnote/blocks': 4.8.1
+      yaml: 2.9.1
+      zod: 3.25.76
 
   '@deepnote/reactivity@1.2.4':
     dependencies:
@@ -3666,6 +3691,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.7):
     optionalDependencies:
       picomatch: 4.0.7
+
+  fflate@0.8.3: {}
 
   find-root@1.1.0: {}
 

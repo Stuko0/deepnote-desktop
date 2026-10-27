@@ -54,6 +54,7 @@ export type ExecutionMode = 'block' | 'downstream';
 export type NewBlockKind =
   | 'code'
   | 'sql'
+  | 'agent'
   | 'markdown'
   | 'input-text'
   | 'input-textarea'
@@ -102,6 +103,26 @@ export type ServerMessage =
       payload: { integrations: IntegrationStatusModel[] };
     }
   | { v: 1; id?: string; type: 'terminals:data'; payload: { terminals: string[] } }
+  | {
+      v: 1;
+      id?: string;
+      type: 'cloud:data';
+      payload: {
+        kind: 'status' | 'run';
+        configured?: boolean;
+        baseUrl?: string;
+        workspace?: { name: string; slug?: string };
+        error?: string;
+        run?: {
+          runId: string;
+          status: string;
+          success: boolean;
+          error?: string;
+          snapshotSaved?: boolean;
+        };
+        log?: string;
+      };
+    }
   | { v: 1; id?: string; type: 'project:error'; payload: { message: string; kind?: string } }
   | { v: 1; id?: string; type: 'ack'; payload: { for: string; ok: true } }
   | { v: 1; type: 'kernel:state'; payload: { state: KernelState; detail?: string } }
@@ -120,4 +141,15 @@ export type ServerMessage =
     }
   | { v: 1; type: 'exec:done'; payload: { summary: ExecutionSummary; snapshotPath?: string } }
   | { v: 1; type: 'exec:error'; payload: { message: string; category?: string } }
+  | {
+      v: 1;
+      type: 'agent:event';
+      payload: {
+        event:
+          | { type: 'text_delta'; text: string }
+          | { type: 'reasoning_delta'; text: string }
+          | { type: 'tool_called'; toolName: string }
+          | { type: 'tool_output'; toolName: string; output: string };
+      };
+    }
   | { v: 1; type: 'log'; payload: { level: 'info' | 'warn' | 'error'; message: string } };

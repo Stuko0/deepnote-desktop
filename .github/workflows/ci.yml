@@ -163,6 +163,19 @@ jobs:
         # ubuntu-latest (24.04) no longer ships webkit2gtk-4.0.
         run: wails build -tags webkit2_41
 
+      - name: Smoke test the binary
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a timeout 12s build/bin/deepnote-desktop &
+            PID=$!
+            sleep 6
+            if kill -0 $PID 2>/dev/null; then echo "binary alive"; kill $PID 2>/dev/null || true;
+            else echo "binary exited early"; wait $PID; exit 1; fi
+          else
+            (./build/bin/deepnote-desktop.exe &) && sleep 6 && tasklist //FI "IMAGENAME eq deepnote-desktop.exe" | grep -q deepnote-desktop && echo "binary alive"
+          fi
+
       - name: Build desktop app (Windows)
         if: runner.os == 'Windows'
         run: wails build

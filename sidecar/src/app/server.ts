@@ -14,6 +14,7 @@ import type { Duplex } from 'node:stream';
 import { parse as parseUrl } from 'node:url';
 import { WebSocketServer, WebSocket as WsClient } from 'ws';
 
+import { fetchCloudStatus, runNotebookInCloud } from '../core/cloud.js';
 import { PROTOCOL_VERSION, parseClientMessage } from '../core/protocol.js';
 import type { ClientMessage, ServerMessage } from '../core/protocol.js';
 import { SessionManager } from '../core/session.js';
@@ -288,7 +289,6 @@ async function handle(
       return;
     }
     case 'dag:get': {
-      console.error('[dag:get] frame received');
       const notebookId = message.payload.notebookId;
       try {
         const dag = await manager.getDag(notebookId);
@@ -325,6 +325,42 @@ async function handle(
         payload: { integrations: manager.getIntegrations() },
       });
       return;
+    case 'cloud:status': {
+      const status = await fetchCloudStatus({ env: manager.cloudEnv() });
+      send({
+        v: PROTOCOL_VERSION,
+        id: message.id,
+        type: 'cloud:data',
+        payload: { kind: 'status', ...status },
+      });
+      return;
+    }
+    case 'cloud:run': {
+      send({
+        v: PROTOCOL_VERSION,
+        id: message.id,
+        type: 'ack',
+        payload: { for: 'cloud:run', ok: true },
+      });
+      const result = await runNotebookInCloud(message.payload.notebookId, {
+        env: manager.cloudEnv(),
+        onStatus: (status) => {
+          send({
+            v: PROTOCOL_VERSION,
+            id: message.id,
+            type: 'cloud:data',
+            payload: { kind: 'run', log: status },
+          });
+        },
+      });
+      send({
+        v: PROTOCOL_VERSION,
+        id: message.id,
+        type: 'cloud:data',
+        payload: { kind: 'run', configured: true, run: result },
+      });
+      return;
+    }
     case 'terminal:list': {
       const terminals = await manager.listTerminals().catch(() => []);
       send({ v: PROTOCOL_VERSION, id: message.id, type: 'terminals:data', payload: { terminals } });

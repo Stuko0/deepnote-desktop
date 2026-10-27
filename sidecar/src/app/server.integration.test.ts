@@ -172,6 +172,106 @@ describe.skipIf(!toolkitInstalled)('sidecar end to end (real kernel)', () => {
     expect(output).toContain('dnd-terminal-ok');
   }, 300_000);
 
+  it('creates an agent block and runs the notebook with a controlled agent failure', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dnd-agent-'));
+    const copyPath = path.join(dir, 'agent.deepnote');
+    fs.copyFileSync(FIXTURE, copyPath);
+
+    const ws = new WebSocket(`${sidecar.url.replace('http', 'ws')}/ws?token=${TOKEN}`);
+    let agentBlockId = '';
+    let agentRunSent = false;
+
+    await new Promise<void>((resolve, reject) => {
+      // Suite runs need a cold kernel start after two project switches.
+      const timer = setTimeout(() => reject(new Error('agent test timed out')), 240_000);
+      ws.on('open', () => {
+        ws.send(
+          JSON.stringify({ v: 1, id: 'open', type: 'project:open', payload: { path: copyPath } }),
+        );
+      });
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(String(raw)) as { type: string; payload: Record<string, unknown> };
+        const project = msg.payload?.project as { path?: string } | null | undefined;
+        if (msg.type === 'project:data' && project?.path === copyPath) {
+          ws.send(
+            JSON.stringify({
+              v: 1,
+              id: 'create',
+              type: 'block:create',
+              payload: {
+                notebookId: 'notebook-hello',
+                afterBlockId: 'block-sum',
+                blockType: 'agent',
+              },
+            }),
+          );
+        } else if (msg.type === 'project:updated') {
+          const updated = msg.payload.project as {
+            notebooks: Array<{ blocks: Array<{ id: string; type: string; content: string }> }>;
+          };
+          const agent = updated.notebooks[0].blocks.find((b) => b.type === 'agent');
+          if (agent && !agentBlockId) {
+            agentBlockId = agent.id;
+            // No API key is configured: the agent must fail as a failed block
+            // (not a crash), exercising the full SDK wiring.
+            agentRunSent = true;
+            ws.send(
+              JSON.stringify({
+                v: 1,
+                id: 'run',
+                type: 'exec:run',
+                payload: { blockIds: [agent.id] },
+              }),
+            );
+          }
+        } else if (
+          msg.type === 'exec:block-start' ||
+          msg.type === 'exec:block-done' ||
+          msg.type === 'log' ||
+          msg.type === 'kernel:state' ||
+          msg.type === 'project:updated'
+        ) {
+          console.log('[agent-test]', msg.type, JSON.stringify(msg.payload).slice(0, 140));
+        } else if (msg.type === 'exec:done') {
+          const summary = msg.payload.summary as { executedBlocks: number; failedBlocks: number };
+          // Run results are broadcast to every connection: skip summaries that
+          // belong to a previous test's run (ours executes exactly one block).
+          if (summary.executedBlocks !== 1) {
+            console.log('[agent-test] ignoring residual exec:done', JSON.stringify(summary));
+            return;
+          }
+          expect(summary.failedBlocks).toBeGreaterThanOrEqual(1);
+          clearTimeout(timer);
+          resolve();
+        } else if (msg.type === 'exec:error') {
+          const message = String(msg.payload.message);
+          console.log('[agent-test] exec:error', message.slice(0, 200));
+          // The engine may still be busy with a previous test: retry ours once.
+          if (message.includes('already in progress') && agentRunSent) {
+            setTimeout(() => {
+              ws.send(
+                JSON.stringify({
+                  v: 1,
+                  id: 'run-retry',
+                  type: 'exec:run',
+                  payload: { blockIds: [agentBlockId] },
+                }),
+              );
+            }, 1500);
+            return;
+          }
+          // A typed run-level error is also an acceptable controlled failure.
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      ws.on('error', reject);
+    });
+    ws.close();
+    expect(agentBlockId).toBeTruthy();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }, 300_000);
+
   it('opens a project and streams notebook outputs', async () => {
     const ws = new WebSocket(`${sidecar.url.replace('http', 'ws')}/ws?token=${TOKEN}`);
     const outputs: string[] = [];

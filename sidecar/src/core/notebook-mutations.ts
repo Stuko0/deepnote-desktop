@@ -14,6 +14,7 @@ import type { DeepnoteFile } from '@deepnote/blocks';
 export type NewBlockType =
   | 'code'
   | 'sql'
+  | 'agent'
   | 'markdown'
   | 'input-text'
   | 'input-textarea'
@@ -27,6 +28,7 @@ export type NewBlockType =
 export const NEW_BLOCK_TYPES: readonly NewBlockType[] = [
   'code',
   'sql',
+  'agent',
   'markdown',
   'input-text',
   'input-textarea',
@@ -135,6 +137,8 @@ export function defaultContentFor(type: NewBlockType): string {
   switch (type) {
     case 'markdown':
       return 'New text';
+    case 'agent':
+      return 'Describe the task for the agent';
     case 'input-text':
     case 'input-textarea':
       return 'label';

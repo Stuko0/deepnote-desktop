@@ -20,6 +20,7 @@ import { useEffect, useMemo } from 'react';
 import { Modal, ModalBody, ModalContent, ModalHeader, ModalOverlay } from '@chakra-ui/react';
 
 import { type BlockHandlers, BlockView } from './components/BlockView';
+import { CloudPanel } from './components/CloudPanel';
 import { type Command, CommandPalette } from './components/CommandPalette';
 import { DagGraph } from './components/DagPanel';
 import { FilesPanel, IntegrationsPanel } from './components/SidePanels';
@@ -132,6 +133,11 @@ export function App() {
       },
       { id: 'new-code', title: 'New code block', run: () => createBlock(selectedBlockId, 'code') },
       { id: 'new-sql', title: 'New SQL block', run: () => createBlock(selectedBlockId, 'sql') },
+      {
+        id: 'new-agent',
+        title: 'New agent block',
+        run: () => createBlock(selectedBlockId, 'agent'),
+      },
       {
         id: 'new-text',
         title: 'New text block',
@@ -338,6 +344,7 @@ export function App() {
           )}
 
           <TerminalPanel />
+          <CloudPanel />
 
           <Box mt={4}>
             <FilesPanel fs={fs} onNavigate={refreshFs} />
