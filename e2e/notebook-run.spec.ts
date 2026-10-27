@@ -117,12 +117,21 @@ test('edits a block in Monaco, autosaves, and runs the edited code', async ({ pa
   await page.goto(url);
   await expect(page.getByText('Hello World')).toBeVisible({ timeout: 30_000 });
 
-  // The second code block renders Monaco; replace its content.
+  // The second code block renders Monaco; replace its content. On CI the
+  // editor can be on screen before it takes keyboard focus, so retry the
+  // click+type until the change actually lands in the model.
   const editors = page.locator('.monaco-editor');
   await expect(editors.first()).toBeVisible({ timeout: 30_000 });
-  await editors.nth(1).click();
-  await page.keyboard.press('Control+a');
-  await page.keyboard.type('print("edited in e2e")');
+  const editedBlock = editors.nth(1);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await editedBlock.click();
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type('print("edited in e2e")');
+    const content = (await editedBlock.textContent().catch(() => '')) ?? '';
+    if (content.includes('edited in e2e')) break;
+    await page.waitForTimeout(1500);
+  }
+  await expect(editedBlock).toContainText('edited in e2e', { timeout: 15_000 });
 
   // The sidecar persists the edit (debounced) and pushes project:updated;
   // the header goes back to "saved" and the file on disk changes.
