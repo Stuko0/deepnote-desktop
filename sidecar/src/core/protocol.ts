@@ -114,8 +114,16 @@ export type ClientMessage =
       payload: { blockId: string; direction: 'up' | 'down' };
     }
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'dag:get'; payload: { notebookId: string } }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'terminal:list' }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'terminal:create' }
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'fs:list'; payload: { subpath?: string } }
-  | { v: typeof PROTOCOL_VERSION; id: string; type: 'integrations:get' };
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'integrations:get' }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id: string;
+      type: 'secrets:set';
+      payload: { envVar: string; value: string | null };
+    };
 
 export type ServerMessage =
   | {
@@ -147,6 +155,12 @@ export type ServerMessage =
       id?: string;
       type: 'integrations:data';
       payload: { integrations: IntegrationStatusModel[] };
+    }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id?: string;
+      type: 'terminals:data';
+      payload: { terminals: string[] };
     }
   | {
       v: typeof PROTOCOL_VERSION;
@@ -212,6 +226,9 @@ const CLIENT_TYPES = new Set([
   'dag:get',
   'fs:list',
   'integrations:get',
+  'terminal:list',
+  'terminal:create',
+  'secrets:set',
 ]);
 
 /** Parse and validate a raw client frame. Returns null when the frame is invalid. */

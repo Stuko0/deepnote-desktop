@@ -1,12 +1,18 @@
 /**
- * Local server: HTTP (health + project snapshot) and WebSocket (/ws) speaking
- * protocol v1. Binds to loopback only and requires a session token.
+ * Local server: HTTP (health, graceful shutdown) and WebSocket (/ws for the
+ * protocol, /terminal for a raw proxy to the toolkit's Jupyter terminals).
+ * Binds to loopback only and requires a session token.
+ *
+ * One SessionManager is shared by every connection of this sidecar: the
+ * sidecar represents the desktop user's single notebook session, and
+ * terminals/projects must be reachable from any view (main window, future
+ * secondary windows).
  */
 
-import fs from 'node:fs';
 import http from 'node:http';
+import type { Duplex } from 'node:stream';
 import { parse as parseUrl } from 'node:url';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, WebSocket as WsClient } from 'ws';
 
 import { PROTOCOL_VERSION, parseClientMessage } from '../core/protocol.js';
 import type { ClientMessage, ServerMessage } from '../core/protocol.js';
@@ -29,7 +35,17 @@ export interface RunningSidecar {
 export function startSidecar(options: SidecarServerOptions): Promise<RunningSidecar> {
   const host = options.host ?? '127.0.0.1';
   const version = options.version ?? '0.1.0';
+  const clients = new Set<import('ws').WebSocket>();
   let closeAll: () => Promise<void> = async () => {};
+
+  const broadcast = (message: ServerMessage): void => {
+    const frame = JSON.stringify(message);
+    for (const client of clients) {
+      if (client.readyState === client.OPEN) client.send(frame);
+    }
+  };
+
+  const manager = new SessionManager(broadcast);
 
   const server = http.createServer((req, res) => {
     const parsed = parseUrl(req.url ?? '/', true);
@@ -57,35 +73,44 @@ export function startSidecar(options: SidecarServerOptions): Promise<RunningSide
   });
 
   const wss = new WebSocketServer({ noServer: true });
-  const managers = new Map<string, SessionManager>();
 
   server.on('upgrade', (req, socket, head) => {
     const parsed = parseUrl(req.url ?? '/', true);
-    if (parsed.pathname !== '/ws') {
-      socket.destroy();
-      return;
-    }
-    const token = parsed.query.token;
-    if (token !== options.token) {
+    if (parsed.query.token !== options.token) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req);
-    });
+
+    if (parsed.pathname === '/ws') {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req);
+      });
+      return;
+    }
+
+    if (parsed.pathname === '/terminal' && typeof parsed.query.name === 'string') {
+      proxyTerminal(parsed.query.name, req, socket, head, manager, wss);
+      return;
+    }
+
+    socket.destroy();
   });
 
   wss.on('connection', (ws) => {
-    const send = (message: ServerMessage) => {
+    clients.add(ws);
+    const send = (message: ServerMessage): void => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
     };
 
-    // One manager per connection keeps notebook sessions isolated per client.
-    const manager = new SessionManager(send);
-    managers.set(String(Date.now() + Math.random()), manager);
-
     send({ v: PROTOCOL_VERSION, type: 'log', payload: { level: 'info', message: 'connected' } });
+    // Replay current session state so reconnecting views do not go blank.
+    send({
+      v: PROTOCOL_VERSION,
+      type: 'project:data',
+      payload: { project: manager.currentProject()?.model ?? null },
+    });
+    send({ v: PROTOCOL_VERSION, type: 'kernel:state', payload: { state: manager.state } });
 
     ws.on('message', async (data) => {
       const message = parseClientMessage(data.toString());
@@ -106,18 +131,12 @@ export function startSidecar(options: SidecarServerOptions): Promise<RunningSide
           type: 'project:error',
           payload: {
             message: error instanceof Error ? error.message : String(error),
-            kind:
-              error instanceof Error && 'name' in error
-                ? String((error as { name: string }).name)
-                : undefined,
           },
         });
       }
     });
 
-    ws.on('close', () => {
-      void manager.close();
-    });
+    ws.on('close', () => clients.delete(ws));
   });
 
   return new Promise((resolve, reject) => {
@@ -126,7 +145,8 @@ export function startSidecar(options: SidecarServerOptions): Promise<RunningSide
       const address = server.address();
       const port = typeof address === 'object' && address ? address.port : 0;
       closeAll = async () => {
-        for (const manager of managers.values()) await manager.close();
+        await manager.close().catch(() => undefined);
+        for (const client of clients) client.close();
         wss.close();
         await new Promise<void>((done) => server.close(() => done()));
       };
@@ -137,6 +157,59 @@ export function startSidecar(options: SidecarServerOptions): Promise<RunningSide
         close: () => closeAll(),
       });
     });
+  });
+}
+
+function proxyTerminal(
+  name: string,
+  req: http.IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  manager: SessionManager,
+  wss: WebSocketServer,
+): void {
+  let toolkitUrl: string;
+  try {
+    toolkitUrl = manager.toolkitUrl();
+  } catch {
+    socket.write('HTTP/1.1 503 Kernel not running\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  // Jupyter Server mounts the terminal WebSocket at /terminals/websocket/{name}
+  // (the /api/terminals/{name} REST route answers JSON, not an upgrade).
+  const upstreamUrl = `${toolkitUrl.replace('http', 'ws')}/terminals/websocket/${encodeURIComponent(name)}`;
+  const upstream = new WsClient(upstreamUrl);
+
+  upstream.on('open', () => {
+    // Complete the browser handshake with the real upgrade request, then pipe.
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on('message', (data) => {
+        if (upstream.readyState === WsClient.OPEN) upstream.send(data.toString());
+      });
+      upstream.on('message', (data) => {
+        if (ws.readyState === ws.OPEN) ws.send(data.toString());
+      });
+      const closeBoth = (): void => {
+        if (upstream.readyState === WsClient.OPEN) upstream.close();
+        if (ws.readyState === ws.OPEN) ws.close();
+      };
+      ws.on('close', closeBoth);
+      ws.on('error', closeBoth);
+      upstream.on('close', closeBoth);
+      upstream.on('error', closeBoth);
+    });
+  });
+
+  upstream.on('error', (error) => {
+    console.error(`[terminal-proxy] upstream ${upstreamUrl} failed: ${error.message}`);
+    socket.write('HTTP/1.1 502 Terminal unavailable\r\n\r\n');
+    socket.destroy();
+  });
+  upstream.on('unexpected-response', (_req, res) => {
+    console.error(`[terminal-proxy] upstream ${upstreamUrl} answered ${res.statusCode}`);
+    socket.write(`HTTP/1.1 502 Terminal unavailable (${res.statusCode})\r\n\r\n`);
+    socket.destroy();
   });
 }
 
@@ -215,6 +288,7 @@ async function handle(
       return;
     }
     case 'dag:get': {
+      console.error('[dag:get] frame received');
       const notebookId = message.payload.notebookId;
       try {
         const dag = await manager.getDag(notebookId);
@@ -243,7 +317,7 @@ async function handle(
       send({ v: PROTOCOL_VERSION, id: message.id, type: 'fs:data', payload: fsResult });
       return;
     }
-    case 'integrations:get': {
+    case 'integrations:get':
       send({
         v: PROTOCOL_VERSION,
         id: message.id,
@@ -251,8 +325,27 @@ async function handle(
         payload: { integrations: manager.getIntegrations() },
       });
       return;
+    case 'terminal:list': {
+      const terminals = await manager.listTerminals().catch(() => []);
+      send({ v: PROTOCOL_VERSION, id: message.id, type: 'terminals:data', payload: { terminals } });
+      return;
     }
-    case 'exec:stop': {
+    case 'terminal:create': {
+      const name = await manager.createTerminal();
+      const terminals = await manager.listTerminals().catch(() => [name]);
+      send({ v: PROTOCOL_VERSION, id: message.id, type: 'terminals:data', payload: { terminals } });
+      return;
+    }
+    case 'secrets:set':
+      await manager.setSecret(message.payload.envVar, message.payload.value);
+      send({
+        v: PROTOCOL_VERSION,
+        id: message.id,
+        type: 'integrations:data',
+        payload: { integrations: manager.getIntegrations() },
+      });
+      return;
+    case 'exec:stop':
       await manager.stop();
       send({
         v: PROTOCOL_VERSION,
@@ -261,8 +354,7 @@ async function handle(
         payload: { for: 'exec:stop', ok: true },
       });
       return;
-    }
-    case 'kernel:restart': {
+    case 'kernel:restart':
       await manager.restartKernel();
       send({
         v: PROTOCOL_VERSION,
@@ -271,19 +363,9 @@ async function handle(
         payload: { for: 'kernel:restart', ok: true },
       });
       return;
-    }
     default: {
       const exhaustive: never = message;
       void exhaustive;
     }
-  }
-}
-
-/** Convenience for tests: unused by the CLI entrypoint. */
-export function isReadableFile(p: string): boolean {
-  try {
-    return fs.statSync(p).isFile();
-  } catch {
-    return false;
   }
 }

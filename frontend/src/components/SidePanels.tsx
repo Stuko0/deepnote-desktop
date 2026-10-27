@@ -1,7 +1,8 @@
 /** Sidebar panels: project files explorer and integrations status. */
 
 import { ArrowBackIcon, ChevronRightIcon, DownloadIcon } from '@chakra-ui/icons';
-import { Box, Button, Code, HStack, IconButton, Text, VStack } from '@chakra-ui/react';
+import { Box, Button, Code, HStack, IconButton, Input, Text, VStack } from '@chakra-ui/react';
+import { useState } from 'react';
 
 import type { FileEntryModel, IntegrationStatusModel } from '../protocol';
 
@@ -87,10 +88,13 @@ export function FilesPanel({
 export function IntegrationsPanel({
   integrations,
   onRefresh,
+  onSetSecret,
 }: {
   integrations: IntegrationStatusModel[];
   onRefresh: () => void;
+  onSetSecret: (envVar: string, value: string | null) => void;
 }) {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   return (
     <Box mt={4}>
       <HStack justify="space-between" mb={1}>
@@ -121,8 +125,32 @@ export function IntegrationsPanel({
               {integration.envVar}
             </Code>
             <Text fontSize="xs" mt={1} color={integration.configured ? 'green.600' : 'red.500'}>
-              {integration.configured ? 'configured in environment' : 'missing from environment'}
+              {integration.configured
+                ? 'configured for this session'
+                : 'missing: set it below or export it before launching'}
             </Text>
+            <HStack mt={1} spacing={1}>
+              <Input
+                size="xs"
+                type="password"
+                placeholder="value (held in memory for this session)"
+                value={drafts[integration.envVar] ?? ''}
+                onChange={(e) => setDrafts((d) => ({ ...d, [integration.envVar]: e.target.value }))}
+              />
+              <Button
+                size="xs"
+                isDisabled={!drafts[integration.envVar]}
+                onClick={() => {
+                  const value = drafts[integration.envVar];
+                  if (value) {
+                    onSetSecret(integration.envVar, value);
+                    setDrafts((d) => ({ ...d, [integration.envVar]: '' }));
+                  }
+                }}
+              >
+                Set
+              </Button>
+            </HStack>
           </Box>
         ))}
       </VStack>

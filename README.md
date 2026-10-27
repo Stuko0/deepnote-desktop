@@ -6,18 +6,21 @@ A local-first desktop application (Linux and Windows) for creating, editing, and
 
 ## Status
 
-Pre-alpha. Phases 0 through 3 of the roadmap are implemented and verified end to end (Phase 3 partially: no terminal yet).
+Pre-alpha. Phases 0 through 3 of the roadmap are implemented and verified end to end.
 
 - **Execution**: the sidecar opens `.deepnote` projects, starts a local Jupyter kernel through `deepnote-toolkit`, streams block outputs over WebSocket, and persists execution snapshots. The kernel starts on first run and stays warm (a full fixture run takes tens of milliseconds). Reactive runs ("block and dependent blocks") expand through the open reactivity DAG.
 - **Editing**: Monaco (self-hosted from npm, offline) for code and SQL, a plain textarea for text blocks, per-block run/move/delete, block creation from the block menu or the palette, and debounced autosave that persists edits straight into the `.deepnote` YAML.
 - **Command palette** (ctrl+P) over a single command registry that also feeds the keyboard shortcuts (ctrl+Enter runs the selected block).
 - **Inputs**: the eight `input-*` block types render as widgets and their values travel with every run.
-- **Environment**: project files explorer, integrations status with the env vars they expect, execution mode selector, kernel state bar, and a first-run hint when the toolkit is missing.
+- **Environment**: project files explorer, integrations status with editable secrets, execution mode selector, kernel state bar, and a first-run hint when the toolkit is missing.
+- **Terminal**: a real local terminal (xterm.js) bridged through the sidecar to the toolkit's Jupyter terminals (PTYs owned by the kernel session).
+- **Dependency graph**: the notebook DAG rendered with React Flow; clicking a node selects the block and dependent runs highlight.
+- **Secrets**: integration secrets entered in the UI are held in the sidecar for the session and persisted in the OS keychain (libsecret / Credential Manager / Keychain) through the Wails shell.
 - **Outputs**: streams, results, sandboxed HTML, PNG images, errors with a "Show error details" toggle, and the Deepnote dataframe MIME rendered as a paginated table.
 
 Verified with 18 unit tests, 4 integration tests against a real kernel (including edit-over-WS persistence), 3 Playwright end-to-end tests (edit in Monaco + autosave + run edited code, palette, full notebook run), and `wails build` on Linux and Windows in CI.
 
-Not implemented yet: the terminal panel (needs the toolkit's terminal API wired through the sidecar), a visual DAG graph (dependency badges exist), keyring-backed secret storage (integrations read env vars), and automatic Python installers (the UI shows the exact command instead).
+Not implemented yet: automatic Python installers (the UI shows the exact command to run instead).
 
 There is no installer yet; build from source (see Development).
 

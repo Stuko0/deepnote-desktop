@@ -46,6 +46,7 @@ export interface ExecutionSummary {
   executedBlocks: number;
   failedBlocks: number;
   totalDurationMs: number;
+  failureCategory?: string;
 }
 
 export type ExecutionMode = 'block' | 'downstream';
@@ -100,6 +101,7 @@ export type ServerMessage =
       type: 'integrations:data';
       payload: { integrations: IntegrationStatusModel[] };
     }
+  | { v: 1; id?: string; type: 'terminals:data'; payload: { terminals: string[] } }
   | { v: 1; id?: string; type: 'project:error'; payload: { message: string; kind?: string } }
   | { v: 1; id?: string; type: 'ack'; payload: { for: string; ok: true } }
   | { v: 1; type: 'kernel:state'; payload: { state: KernelState; detail?: string } }

@@ -17,9 +17,13 @@ import {
 } from '@chakra-ui/react';
 import { useEffect, useMemo } from 'react';
 
+import { Modal, ModalBody, ModalContent, ModalHeader, ModalOverlay } from '@chakra-ui/react';
+
 import { type BlockHandlers, BlockView } from './components/BlockView';
 import { type Command, CommandPalette } from './components/CommandPalette';
+import { DagGraph } from './components/DagPanel';
 import { FilesPanel, IntegrationsPanel } from './components/SidePanels';
+import { TerminalPanel } from './components/TerminalPanel';
 import { useAppStore } from './store';
 import './monaco';
 
@@ -75,6 +79,10 @@ export function App() {
     refreshDag,
     refreshFs,
     refreshIntegrations,
+    refreshTerminals,
+    setSecret,
+    dagOpen,
+    terminals,
   } = store;
 
   useEffect(() => {
@@ -84,6 +92,11 @@ export function App() {
     const projectPath = params.get('project');
     if (projectPath) openProject(projectPath);
   }, [init, openProject]);
+
+  // Terminals are owned by the toolkit kernel: refresh the list when it comes up.
+  useEffect(() => {
+    if (kernelState === 'ready' || kernelState === 'running') refreshTerminals();
+  }, [kernelState, refreshTerminals]);
 
   const notebook =
     project?.notebooks.find((nb) => nb.id === selectedNotebookId) ?? project?.notebooks[0];
@@ -136,7 +149,14 @@ export function App() {
       },
       { id: 'restart-kernel', title: 'Restart kernel', run: restartKernel },
       { id: 'stop-run', title: 'Stop run', run: stopRun },
-      { id: 'refresh-dag', title: 'Open dependency graph', run: refreshDag },
+      {
+        id: 'refresh-dag',
+        title: 'Open dependency graph',
+        run: () => {
+          refreshDag();
+          useAppStore.setState({ dagOpen: true });
+        },
+      },
       {
         id: 'open-project',
         title: 'Open project...',
@@ -317,10 +337,16 @@ export function App() {
             </Box>
           )}
 
-          <Box mt={5}>
+          <TerminalPanel />
+
+          <Box mt={4}>
             <FilesPanel fs={fs} onNavigate={refreshFs} />
           </Box>
-          <IntegrationsPanel integrations={integrations} onRefresh={refreshIntegrations} />
+          <IntegrationsPanel
+            integrations={integrations}
+            onRefresh={refreshIntegrations}
+            onSetSecret={setSecret}
+          />
         </Box>
 
         <Box flex={1} p={6} maxW="980px" mx="auto" w="100%">
@@ -399,6 +425,30 @@ export function App() {
         onClose={() => setPaletteOpen(false)}
         commands={commands}
       />
+
+      <Modal isOpen={dagOpen} onClose={() => useAppStore.setState({ dagOpen: false })} size="4xl">
+        <ModalOverlay />
+        <ModalContent>
+          <ModalHeader fontSize="md">Dependency graph</ModalHeader>
+          <ModalBody pb={4}>
+            {dag && notebook ? (
+              <DagGraph
+                notebook={notebook}
+                dag={dag}
+                selectedBlockId={selectedBlockId}
+                onSelect={(blockId) => {
+                  selectBlock(blockId);
+                  useAppStore.setState({ dagOpen: false });
+                }}
+              />
+            ) : (
+              <Text color="gray.500" fontSize="sm">
+                Loading dependencies (this analyzes the Python AST of every block)...
+              </Text>
+            )}
+          </ModalBody>
+        </ModalContent>
+      </Modal>
 
       {/* Panels load their data when a project is open */}
       <PanelLoader

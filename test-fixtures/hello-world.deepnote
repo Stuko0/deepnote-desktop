@@ -1,39 +1,47 @@
 metadata:
   createdAt: 2026-10-26T00:00:00.000Z
   modifiedAt: 2026-10-26T00:00:00.000Z
-version: "1"
 project:
   id: 11111111-2222-3333-4444-555555555555
   name: Hello World
   notebooks:
-    - id: notebook-hello
-      name: Hello
-      blocks:
+    - blocks:
         - id: block-intro
+          blockGroup: group-intro
+          sortingKey: "000000"
           type: markdown
-          content: |
+          content: >-
             # Hello
 
+
             Minimal notebook used by unit and end-to-end tests.
-          sortingKey: a0
-          blockGroup: group-intro
           metadata: {}
         - id: block-print
+          blockGroup: group-print
+          sortingKey: "000001"
           type: code
           content: print("hello from deepnote-desktop")
-          sortingKey: a1
-          blockGroup: group-print
           metadata:
-            deepnote_variable_name: df
             deepnote_table_state:
               pageSize: 10
               pageIndex: 1
+            deepnote_variable_name: df
         - id: block-sum
-          type: code
-          content: |
-            total = 40 + 2
-            print(total)
-          sortingKey: a2
           blockGroup: group-sum
+          sortingKey: "000002"
+          type: code
+          content: >
+            total = 40 + 2
+
+            print(total)
           metadata:
-            deepnote_variable_name: result
+            deepnote_variable_name: total
+        - id: block-double
+          blockGroup: group-double
+          sortingKey: "000003"
+          type: code
+          content: print(total * 2)
+          metadata: {}
+      id: notebook-hello
+      name: Hello
+version: "1"

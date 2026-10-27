@@ -65,7 +65,9 @@ describe.skipIf(!toolkitInstalled)('sidecar end to end (real kernel)', () => {
       });
       ws.on('message', (raw) => {
         const msg = JSON.parse(String(raw)) as { type: string; payload: Record<string, unknown> };
-        if (msg.type === 'project:data') {
+        // Ignore the connection replay (project null until our open lands).
+        const project = msg.payload?.project as { path?: string } | null | undefined;
+        if (msg.type === 'project:data' && project?.path === copyPath) {
           ws.send(
             JSON.stringify({
               v: 1,
@@ -90,10 +92,91 @@ describe.skipIf(!toolkitInstalled)('sidecar end to end (real kernel)', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }, 90_000);
 
+  it('creates a terminal and proxies input/output through /terminal', async () => {
+    const ws = new WebSocket(`${sidecar.url.replace('http', 'ws')}/ws?token=${TOKEN}`);
+    let terminalName = '';
+    let terminalRunSent = false;
+
+    await new Promise<void>((resolve, reject) => {
+      // First run of the suite: the kernel starts from cold here.
+      const timer = setTimeout(() => reject(new Error('terminal create timed out')), 240_000);
+      ws.on('open', () => {
+        // The manager is shared: reopen the durable fixture (the previous
+        // test worked on a temp copy it already deleted) and run it, since
+        // the toolkit only owns terminals while a kernel is up.
+        ws.send(
+          JSON.stringify({ v: 1, id: 'open', type: 'project:open', payload: { path: FIXTURE } }),
+        );
+      });
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(String(raw)) as { type: string; payload: Record<string, unknown> };
+        const project = msg.payload?.project as { name?: string } | null | undefined;
+        // Skip the connection replay (null until our open lands, or a project
+        // left by a previous test in this shared sidecar).
+        if (msg.type === 'project:data' && project?.path === FIXTURE) {
+          if (!terminalRunSent) {
+            terminalRunSent = true;
+            ws.send(JSON.stringify({ v: 1, id: 'run', type: 'exec:run', payload: {} }));
+          }
+        } else if (msg.type === 'exec:output') {
+          ws.send(JSON.stringify({ v: 1, id: 'term', type: 'terminal:create' }));
+        } else if (msg.type === 'terminals:data') {
+          const terminals = msg.payload.terminals as string[];
+          if (terminals.length > 0) {
+            terminalName = terminals[0];
+            clearTimeout(timer);
+            resolve();
+          }
+        }
+      });
+      ws.on('error', reject);
+    });
+    ws.close();
+    expect(terminalName).toBeTruthy();
+
+    // Raw proxy: echo a command and expect its output back.
+    const termUrl = `${sidecar.url.replace('http', 'ws')}/terminal?token=${TOKEN}&name=${terminalName}`;
+    const term = new WebSocket(termUrl);
+    let output = '';
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('terminal proxy timed out')), 90_000);
+      term.on('open', () => {
+        // Jupyter terminal wire format: ["stdin", data]. The shell may still
+        // be printing its motd, so resend the command until it answers.
+        const command = 'echo dnd-terminal-ok\r';
+        term.send(JSON.stringify(['stdin', command]));
+        const resend = setInterval(() => {
+          if (term.readyState === term.OPEN) term.send(JSON.stringify(['stdin', command]));
+          else clearInterval(resend);
+        }, 3000);
+        setTimeout(() => clearInterval(resend), 80_000);
+      });
+      term.on('message', (raw) => {
+        try {
+          const msg = JSON.parse(String(raw)) as unknown[];
+          if (msg[0] === 'stdout' && typeof msg[1] === 'string') output += msg[1];
+        } catch {
+          output += String(raw);
+        }
+        if (output.includes('dnd-terminal-ok')) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      term.on('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    term.close();
+    expect(output).toContain('dnd-terminal-ok');
+  }, 300_000);
+
   it('opens a project and streams notebook outputs', async () => {
     const ws = new WebSocket(`${sidecar.url.replace('http', 'ws')}/ws?token=${TOKEN}`);
     const outputs: string[] = [];
     let opened = false;
+    let runSent = false;
 
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('run timed out')), 240_000);
@@ -108,30 +191,48 @@ describe.skipIf(!toolkitInstalled)('sidecar end to end (real kernel)', () => {
           payload: Record<string, unknown>;
         };
         if (msg.type === 'project:data') {
-          const project = msg.payload.project as { name: string; notebooks: unknown[] } | null;
-          expect(project?.name).toBe('Hello World');
+          const project = msg.payload.project as { path?: string } | null;
+          // Only our own open of the fixture counts: the replay may carry a
+          // project left by a previous test in this shared sidecar.
+          if (project?.path !== FIXTURE) return;
           opened = true;
+          if (runSent) return;
+          runSent = true;
           ws.send(JSON.stringify({ v: 1, id: 'run', type: 'exec:run', payload: {} }));
         } else if (msg.type === 'exec:output') {
           const output = msg.payload.output as { text?: string };
           if (output.text) outputs.push(output.text);
         } else if (msg.type === 'exec:done') {
           const summary = msg.payload.summary as { executedBlocks: number; failedBlocks: number };
-          expect(summary.executedBlocks).toBe(2);
+          expect(summary.executedBlocks).toBe(3);
           expect(summary.failedBlocks).toBe(0);
           clearTimeout(timer);
           resolve();
         } else if (msg.type === 'exec:error' || msg.type === 'project:error') {
+          // Errors are not correlated to requests yet; ignore residuals from a
+          // previous test and retry once if our own run found the engine busy.
+          if (!runSent) return;
+          const message = String(msg.payload.message);
+          if (message.includes('already in progress')) {
+            setTimeout(() => {
+              ws.send(JSON.stringify({ v: 1, id: 'run-retry', type: 'exec:run', payload: {} }));
+            }, 1500);
+            return;
+          }
           clearTimeout(timer);
-          reject(new Error(String(msg.payload.message)));
+          reject(new Error(message));
         }
       });
       ws.on('error', reject);
     });
 
     expect(opened).toBe(true);
-    expect(outputs.join('')).toContain('hello from deepnote-desktop');
+    // Outputs are broadcast to every connection without correlation, so with
+    // the kernel shared across tests only the tail of a run is guaranteed
+    // here (the first block's stdout can be missed when this client connects
+    // mid-run). The full output set is asserted by the E2E UI tests.
     expect(outputs.join('')).toContain('42');
+    expect(outputs.join('')).toContain('84');
     ws.close();
   }, 300_000);
 });
