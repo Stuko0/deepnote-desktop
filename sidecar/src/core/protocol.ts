@@ -11,6 +11,21 @@ export const PROTOCOL_VERSION = 1 as const;
 
 export type KernelState = 'stopped' | 'starting' | 'ready' | 'running' | 'error';
 
+export type ExecutionMode = 'block' | 'downstream';
+
+export type NewBlockKind =
+  | 'code'
+  | 'sql'
+  | 'markdown'
+  | 'input-text'
+  | 'input-textarea'
+  | 'input-checkbox'
+  | 'input-select'
+  | 'input-slider'
+  | 'input-date'
+  | 'input-date-range'
+  | 'input-file';
+
 export interface BlockModel {
   id: string;
   type: string;
@@ -40,18 +55,67 @@ export interface ProjectModel {
   python: { path: string; source: string; warnings: string[]; toolkitInstalled: boolean };
 }
 
+export interface DagModel {
+  edges: Array<{ from: string; to: string }>;
+  upstream: Record<string, string[]>;
+  downstream: Record<string, string[]>;
+}
+
+export interface FileEntryModel {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size: number;
+}
+
+export interface IntegrationStatusModel {
+  id: string;
+  name: string;
+  type: string;
+  envVar: string;
+  configured: boolean;
+}
+
 export type ClientMessage =
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'project:open'; payload: { path: string } }
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'project:close' }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'project:get' }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'project:save' }
   | {
       v: typeof PROTOCOL_VERSION;
       id: string;
       type: 'exec:run';
-      payload: { notebookId?: string; blockIds?: string[] };
+      payload: {
+        notebookId?: string;
+        blockIds?: string[];
+        mode?: ExecutionMode;
+        inputs?: Record<string, unknown>;
+      };
     }
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'exec:stop' }
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'kernel:restart' }
-  | { v: typeof PROTOCOL_VERSION; id: string; type: 'project:get' };
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id: string;
+      type: 'block:update';
+      payload: { blockId: string; content?: string; metadata?: Record<string, unknown> };
+    }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id: string;
+      type: 'block:create';
+      payload: { notebookId: string; afterBlockId: string | null; blockType: NewBlockKind };
+    }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'block:delete'; payload: { blockId: string } }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id: string;
+      type: 'block:move';
+      payload: { blockId: string; direction: 'up' | 'down' };
+    }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'dag:get'; payload: { notebookId: string } }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'fs:list'; payload: { subpath?: string } }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'integrations:get' };
 
 export type ServerMessage =
   | {
@@ -59,6 +123,30 @@ export type ServerMessage =
       id?: string;
       type: 'project:data';
       payload: { project: ProjectModel | null };
+    }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id?: string;
+      type: 'project:updated';
+      payload: { project: ProjectModel };
+    }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id?: string;
+      type: 'dag:data';
+      payload: { notebookId: string; dag: DagModel | null; error?: string };
+    }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id?: string;
+      type: 'fs:data';
+      payload: { subpath: string; entries: FileEntryModel[] };
+    }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id?: string;
+      type: 'integrations:data';
+      payload: { integrations: IntegrationStatusModel[] };
     }
   | {
       v: typeof PROTOCOL_VERSION;
@@ -113,9 +201,17 @@ const CLIENT_TYPES = new Set([
   'project:open',
   'project:close',
   'project:get',
+  'project:save',
   'exec:run',
   'exec:stop',
   'kernel:restart',
+  'block:update',
+  'block:create',
+  'block:delete',
+  'block:move',
+  'dag:get',
+  'fs:list',
+  'integrations:get',
 ]);
 
 /** Parse and validate a raw client frame. Returns null when the frame is invalid. */

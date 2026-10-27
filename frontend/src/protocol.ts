@@ -48,8 +48,58 @@ export interface ExecutionSummary {
   totalDurationMs: number;
 }
 
+export type ExecutionMode = 'block' | 'downstream';
+
+export type NewBlockKind =
+  | 'code'
+  | 'sql'
+  | 'markdown'
+  | 'input-text'
+  | 'input-textarea'
+  | 'input-checkbox'
+  | 'input-select'
+  | 'input-slider'
+  | 'input-date'
+  | 'input-date-range'
+  | 'input-file';
+
+export interface DagModel {
+  edges: Array<{ from: string; to: string }>;
+  upstream: Record<string, string[]>;
+  downstream: Record<string, string[]>;
+}
+
+export interface FileEntryModel {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size: number;
+}
+
+export interface IntegrationStatusModel {
+  id: string;
+  name: string;
+  type: string;
+  envVar: string;
+  configured: boolean;
+}
+
 export type ServerMessage =
   | { v: 1; id?: string; type: 'project:data'; payload: { project: ProjectModel | null } }
+  | { v: 1; id?: string; type: 'project:updated'; payload: { project: ProjectModel } }
+  | {
+      v: 1;
+      id?: string;
+      type: 'dag:data';
+      payload: { notebookId: string; dag: DagModel | null; error?: string };
+    }
+  | { v: 1; id?: string; type: 'fs:data'; payload: { subpath: string; entries: FileEntryModel[] } }
+  | {
+      v: 1;
+      id?: string;
+      type: 'integrations:data';
+      payload: { integrations: IntegrationStatusModel[] };
+    }
   | { v: 1; id?: string; type: 'project:error'; payload: { message: string; kind?: string } }
   | { v: 1; id?: string; type: 'ack'; payload: { for: string; ok: true } }
   | { v: 1; type: 'kernel:state'; payload: { state: KernelState; detail?: string } }

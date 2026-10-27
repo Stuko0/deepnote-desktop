@@ -1,13 +1,21 @@
 /**
  * Session manager: owns the open project and the execution engine.
  *
- * The engine (and with it the Jupyter server + kernel) is started on first use
- * and kept warm across runs, unlike upstream `runWithInputs` which starts and
- * kills the server per run. This is what makes sub-second re-runs possible.
+ * The engine (and with it the Jupyter server + kernel) is started on first
+ * use and kept warm across runs, unlike upstream `runWithInputs` which
+ * starts and kills the server per run. Notebook mutations (Fase 2) are
+ * applied to the parsed file and persisted to disk immediately; the UI
+ * debounces its own edits, the sidecar is the single writer of the file.
  */
 
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+import { serializeDeepnoteFile } from '@deepnote/blocks';
+import type { DeepnoteFile } from '@deepnote/blocks';
 import { saveExecutionSnapshot } from '@deepnote/convert';
 import type { BlockExecutionOutput } from '@deepnote/convert';
+import { getDagForBlocks } from '@deepnote/reactivity';
 import {
   ExecutionEngine,
   TOOLKIT_INSTALL_HINT,
@@ -17,10 +25,32 @@ import {
   resolveProjectPython,
 } from '@deepnote/runtime-core';
 
+import {
+  type NewBlockType,
+  createBlockAfter,
+  defaultContentFor,
+  deleteBlock,
+  moveBlock,
+  updateBlockContent,
+} from './notebook-mutations.js';
 import { type LoadedProject, loadProject } from './project.js';
-import type { KernelState, ServerMessage } from './protocol.js';
+import type {
+  DagModel,
+  ExecutionMode,
+  FileEntryModel,
+  IntegrationStatusModel,
+  KernelState,
+  ServerMessage,
+} from './protocol.js';
 
 export type Emit = (message: ServerMessage) => void;
+
+export interface RunOptions {
+  notebookId?: string;
+  blockIds?: string[];
+  mode?: ExecutionMode;
+  inputs?: Record<string, unknown>;
+}
 
 export class SessionManager {
   private project: LoadedProject | null = null;
@@ -44,6 +74,11 @@ export class SessionManager {
     this.emit({ v: 1, type: 'kernel:state', payload: { state, detail } });
   }
 
+  private currentFile(): DeepnoteFile {
+    if (!this.project) throw new Error('no project is open');
+    return this.project.file;
+  }
+
   async open(filePath: string): Promise<void> {
     await this.close();
     this.project = await loadProject(filePath);
@@ -54,14 +89,157 @@ export class SessionManager {
     return this.project;
   }
 
+  /** Serialize the in-memory file to disk and push the refreshed model. */
+  private async persist(): Promise<void> {
+    const project = this.currentProject();
+    if (!project) throw new Error('no project is open');
+    const yaml = serializeDeepnoteFile(project.file);
+    await fs.writeFile(project.filePath, yaml, 'utf8');
+    // Reload so the client model reflects schema-normalized state.
+    const reloaded = await loadProject(project.filePath);
+    this.project = { ...reloaded, file: project.file };
+    this.emit({ v: 1, type: 'project:updated', payload: { project: this.project.model } });
+  }
+
+  async save(): Promise<void> {
+    await this.persist();
+  }
+
+  async updateBlock(
+    blockId: string,
+    content: string | undefined,
+    metadata: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    const file = this.currentFile();
+    if (content !== undefined) updateBlockContent(file, blockId, content);
+    if (metadata) {
+      const notebook = file.project.notebooks.find((n) => n.blocks.some((b) => b.id === blockId));
+      const block = notebook?.blocks.find((b) => b.id === blockId);
+      if (!block) throw new Error(`block ${blockId} not found`);
+      block.metadata = { ...block.metadata, ...metadata } as typeof block.metadata;
+    }
+    await this.persist();
+  }
+
+  async createBlock(
+    notebookId: string,
+    afterBlockId: string | null,
+    blockType: NewBlockType,
+  ): Promise<void> {
+    const { file } = createBlockAfter(this.currentFile(), notebookId, afterBlockId, blockType);
+    const notebook = file.project.notebooks.find((n) => n.id === notebookId);
+    const created = notebook?.blocks.at(-1) ?? notebook?.blocks.at(0);
+    if (created && defaultContentFor(blockType)) {
+      created.content = defaultContentFor(blockType);
+    }
+    await this.persist();
+  }
+
+  async deleteBlock(blockId: string): Promise<void> {
+    deleteBlock(this.currentFile(), blockId);
+    await this.persist();
+  }
+
+  async moveBlock(blockId: string, direction: 'up' | 'down'): Promise<void> {
+    moveBlock(this.currentFile(), blockId, direction);
+    await this.persist();
+  }
+
+  /** Upstream/downstream map for a notebook, via the open reactivity DAG. */
+  async getDag(notebookId: string): Promise<DagModel> {
+    const project = this.currentProject();
+    if (!project) throw new Error('no project is open');
+    const notebook = project.file.project.notebooks.find((n) => n.id === notebookId);
+    if (!notebook) throw new Error(`notebook ${notebookId} not found`);
+
+    const { dag } = await getDagForBlocks(notebook.blocks);
+    const upstream: Record<string, string[]> = {};
+    const downstream: Record<string, string[]> = {};
+    for (const node of dag.nodes) {
+      upstream[node.id] = [];
+      downstream[node.id] = [];
+    }
+    for (const edge of dag.edges) {
+      upstream[edge.to]?.push(edge.from);
+      downstream[edge.from]?.push(edge.to);
+    }
+    return {
+      edges: dag.edges.map((edge: { from: string; to: string }) => ({
+        from: edge.from,
+        to: edge.to,
+      })),
+      upstream,
+      downstream,
+    };
+  }
+
+  /** List files in the project working directory (no traversal outside it). */
+  async listFiles(subpath = ''): Promise<{ subpath: string; entries: FileEntryModel[] }> {
+    const project = this.currentProject();
+    if (!project) throw new Error('no project is open');
+    const base = path.resolve(project.workingDirectory);
+    const target = path.resolve(base, subpath);
+    const realBase = await fs.realpath(base).catch(() => base);
+    const realTarget = await fs.realpath(target).catch(() => target);
+    if (realTarget !== realBase && !realTarget.startsWith(realBase + path.sep)) {
+      throw new Error('path escapes the project directory');
+    }
+    const dirents = await fs.readdir(target, { withFileTypes: true });
+    const entries = await Promise.all(
+      dirents
+        .filter((d) => !d.name.startsWith('.'))
+        .map(async (d) => {
+          let size = 0;
+          if (!d.isDirectory()) {
+            size = await fs
+              .stat(path.join(target, d.name))
+              .then((s) => s.size)
+              .catch(() => 0);
+          }
+          return {
+            name: d.name,
+            path: path.posix.join(subpath.replaceAll(path.sep, '/'), d.name),
+            isDirectory: d.isDirectory(),
+            size,
+          };
+        }),
+    );
+    entries.sort(
+      (a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name),
+    );
+    return { subpath, entries };
+  }
+
+  /** Project integrations and whether their env vars are present. */
+  getIntegrations(): IntegrationStatusModel[] {
+    const project = this.currentProject();
+    if (!project) throw new Error('no project is open');
+    const integrations = (project.file.project.integrations ?? []) as Array<{
+      id: string;
+      name: string;
+      type: string;
+    }>;
+    return integrations.map((integration) => {
+      const envVar = `DEEPNOTE_SQL_CONN_${integration.name.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
+      return {
+        id: integration.id,
+        name: integration.name,
+        type: integration.type,
+        envVar,
+        configured: Boolean(process.env[envVar]),
+      };
+    });
+  }
+
   /** Start (or reuse) the engine for the open project. Throws with a clear hint when the toolkit is missing. */
   private async ensureEngine(): Promise<ExecutionEngine> {
     if (this.engine) return this.engine;
-    if (!this.project) throw new Error('no project is open');
+    const project = this.currentProject();
+    if (!project) throw new Error('no project is open');
 
     const resolved = await resolveProjectPython({
-      projectId: this.project.model.id,
-      searchDirs: [this.project.workingDirectory],
+      projectId: project.model.id,
+      searchDirs: [project.workingDirectory],
     });
 
     const toolkitInstalled = await hasDeepnoteToolkit(resolved.pythonPath).catch(() => false);
@@ -74,7 +252,7 @@ export class SessionManager {
     this.setKernelState('starting');
     const engine = new ExecutionEngine({
       pythonEnv: resolved.pythonPath,
-      workingDirectory: this.project.workingDirectory,
+      workingDirectory: project.workingDirectory,
       env: { DEEPNOTE_RUNTIME__RUNNING_IN_DETACHED_MODE: 'true' },
     });
     await engine.start();
@@ -84,20 +262,55 @@ export class SessionManager {
   }
 
   /**
-   * Run the open project (optionally a single notebook / block set).
-   * Events are streamed through `emit`; a snapshot with outputs is saved at the end.
+   * Run the open project (optionally a single notebook / block set, with the
+   * reactive "block and dependent blocks" expansion). Events are streamed
+   * through `emit`; a snapshot with outputs is saved at the end.
    */
-  async run(options: { notebookId?: string; blockIds?: string[] } = {}): Promise<void> {
-    if (!this.project) throw new Error('no project is open');
+  async run(options: RunOptions = {}): Promise<void> {
+    const project = this.currentProject();
+    if (!project) throw new Error('no project is open');
     if (this.running) throw new Error('a run is already in progress');
 
     const engine = await this.ensureEngine();
-    const project = this.project;
     const notebookName = options.notebookId
       ? project.file.project.notebooks.find((n) => n.id === options.notebookId)?.name
       : undefined;
     if (options.notebookId && !notebookName) {
       throw new Error(`notebook ${options.notebookId} not found in project`);
+    }
+
+    let blockIds = options.blockIds;
+    if (blockIds && options.mode === 'downstream') {
+      try {
+        const notebook =
+          project.file.project.notebooks.find((n) => n.id === options.notebookId) ??
+          project.file.project.notebooks[0];
+        const { dag } = await getDagForBlocks(notebook.blocks);
+        // downstream expansion (one hop per known edge; selection grows until stable)
+        const expanded = new Set(blockIds);
+        let grew = true;
+        while (grew) {
+          grew = false;
+          for (const edge of dag.edges as Array<{ from: string; to: string }>) {
+            if (expanded.has(edge.from) && !expanded.has(edge.to)) {
+              expanded.add(edge.to);
+              grew = true;
+            }
+          }
+        }
+        blockIds = [...expanded];
+      } catch (error) {
+        this.emit({
+          v: 1,
+          type: 'log',
+          payload: {
+            level: 'warn',
+            message: `reactive expansion unavailable, running selection only: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          },
+        });
+      }
     }
 
     this.running = true;
@@ -109,7 +322,8 @@ export class SessionManager {
       this.setKernelState('running');
       const summary = await engine.runProject(project.file, {
         notebookName,
-        blockIds: options.blockIds,
+        blockIds,
+        inputs: options.inputs,
         signal: this.abort.signal,
         onServerStarting: () => this.setKernelState('starting'),
         onServerReady: () => this.setKernelState('running'),
