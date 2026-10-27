@@ -117,19 +117,43 @@ test('edits a block in Monaco, autosaves, and runs the edited code', async ({ pa
   await page.goto(url);
   await expect(page.getByText('Hello World')).toBeVisible({ timeout: 30_000 });
 
-  // The second code block renders Monaco; replace its content. On CI the
-  // editor can be on screen before it takes keyboard focus, so retry the
-  // click+type until the change actually lands in the model.
+  // Drive the edit through Monaco's own model API (the self-hosted build
+  // exposes window.monaco): setValue fires the same change event the app
+  // listens to, so the optimistic store update and the debounced autosave run
+  // exactly as they do for typed input. Keyboard focus on Monaco's hidden
+  // inputs proved unreliable across environments (CI landed on the IME
+  // textarea, where keystrokes go nowhere).
   const editors = page.locator('.monaco-editor');
   await expect(editors.first()).toBeVisible({ timeout: 30_000 });
   const editedBlock = editors.nth(1);
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await editedBlock.click();
-    await page.keyboard.press('Control+a');
-    await page.keyboard.type('print("edited in e2e")');
-    const content = (await editedBlock.textContent().catch(() => '')) ?? '';
-    if (content.includes('edited in e2e')) break;
-    await page.waitForTimeout(1500);
+  const driven = await page.evaluate(() => {
+    const api = (
+      window as unknown as {
+        monaco?: {
+          editor?: {
+            getModels?: () => Array<{ setValue: (v: string) => void; getValue: () => string }>;
+          };
+        };
+      }
+    ).monaco;
+    const models = api?.editor?.getModels?.() ?? [];
+    if (models.length < 2) return false;
+    if (models[1].getValue().includes('edited in e2e')) return true;
+    models[1].setValue('print("edited in e2e")\n');
+    return true;
+  });
+  if (!driven) {
+    // Fallback: keyboard through whichever textarea the editor exposes.
+    console.log('monaco model API unavailable, falling back to keyboard input');
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await editedBlock.locator('.view-lines').first().click();
+      const area = editedBlock.locator('textarea').first();
+      if (await area.count()) await area.focus().catch(() => undefined);
+      await page.keyboard.press('Control+a');
+      await page.keyboard.type('print("edited in e2e")');
+      await page.waitForTimeout(1500);
+      if (((await editedBlock.textContent()) ?? '').includes('edited in e2e')) break;
+    }
   }
   await expect(editedBlock).toContainText('edited in e2e', { timeout: 15_000 });
 
