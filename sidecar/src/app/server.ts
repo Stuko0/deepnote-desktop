@@ -126,6 +126,10 @@ export function startSidecar(options: SidecarServerOptions): Promise<RunningSide
       try {
         await handle(message, manager, send);
       } catch (error) {
+        console.error(
+          `[handler] ${message.type} failed:`,
+          error instanceof Error ? (error.stack ?? error.message) : String(error),
+        );
         send({
           v: PROTOCOL_VERSION,
           id: message.id,

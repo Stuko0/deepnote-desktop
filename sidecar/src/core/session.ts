@@ -99,7 +99,11 @@ export class SessionManager {
       return;
     }
     // Load the incoming project first; only then swap and stop the engine.
+    console.error(`[open] loading ${absolute}`);
     const loaded = await loadProject(absolute);
+    console.error(
+      `[open] loaded ${loaded.filePath} (${loaded.model.notebooks[0]?.blocks.length ?? 0} blocks)`,
+    );
     await this.stopEngine('project switched');
     this.project = loaded;
     this.emit({ v: 1, type: 'project:data', payload: { project: this.project.model } });
@@ -135,7 +139,9 @@ export class SessionManager {
     const project = this.currentProject();
     if (!project) throw new Error('no project is open');
     const yaml = serializeDeepnoteFile(project.file);
+    console.error(`[persist] writing ${yaml.length} chars to ${project.filePath}`);
     await fs.writeFile(project.filePath, yaml, 'utf8');
+    console.error(`[persist] wrote ${project.filePath}`);
     // Reload so the client model reflects schema-normalized state.
     const reloaded = await loadProject(project.filePath);
     this.project = { ...reloaded, file: project.file };
