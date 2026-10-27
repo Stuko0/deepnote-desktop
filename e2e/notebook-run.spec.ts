@@ -114,6 +114,15 @@ test('edits a block in Monaco, autosaves, and runs the edited code', async ({ pa
   fs.copyFileSync(FIXTURE, copyPath);
 
   const url = `http://127.0.0.1:${UI_PORT}/?sidecar=http://127.0.0.1:${sidecarPort}&token=${TOKEN}&project=${encodeURIComponent(copyPath)}`;
+  // Diagnostics: which frames does the UI send, and does any UI alert fire?
+  page.on('websocket', (ws) => {
+    ws.on('framesent', (frame) => {
+      const payload = String(frame.payload ?? '');
+      if (payload.includes('block:update') || payload.includes('project:open')) {
+        console.log('WS OUT:', payload.slice(0, 160));
+      }
+    });
+  });
   await page.goto(url);
   await expect(page.getByText('Hello World')).toBeVisible({ timeout: 30_000 });
 
@@ -159,6 +168,9 @@ test('edits a block in Monaco, autosaves, and runs the edited code', async ({ pa
 
   // The sidecar persists the edit (debounced) and pushes project:updated;
   // the header goes back to "saved" and the file on disk changes.
+  await page.waitForTimeout(4000);
+  const alerts = await page.locator('[role="alert"]').allInnerTexts();
+  console.log('UI alerts:', JSON.stringify(alerts).slice(0, 300));
   await expect(page.getByText('saved')).toBeVisible({ timeout: 30_000 });
   await expect
     .poll(() => fs.readFileSync(copyPath, 'utf8'), { timeout: 30_000 })
