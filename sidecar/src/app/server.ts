@@ -179,6 +179,79 @@ async function handle(
       await manager.run(message.payload ?? {});
       return;
     }
+    case 'project:save': {
+      await manager.save();
+      send({
+        v: PROTOCOL_VERSION,
+        id: message.id,
+        type: 'ack',
+        payload: { for: 'project:save', ok: true },
+      });
+      return;
+    }
+    case 'block:update': {
+      await manager.updateBlock(
+        message.payload.blockId,
+        message.payload.content,
+        message.payload.metadata,
+      );
+      return;
+    }
+    case 'block:create': {
+      const createPayload = message.payload;
+      await manager.createBlock(
+        createPayload.notebookId,
+        createPayload.afterBlockId,
+        createPayload.blockType,
+      );
+      return;
+    }
+    case 'block:delete': {
+      await manager.deleteBlock(message.payload.blockId);
+      return;
+    }
+    case 'block:move': {
+      await manager.moveBlock(message.payload.blockId, message.payload.direction);
+      return;
+    }
+    case 'dag:get': {
+      const notebookId = message.payload.notebookId;
+      try {
+        const dag = await manager.getDag(notebookId);
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'dag:data',
+          payload: { notebookId, dag },
+        });
+      } catch (error) {
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'dag:data',
+          payload: {
+            notebookId,
+            dag: null,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+      return;
+    }
+    case 'fs:list': {
+      const fsResult = await manager.listFiles(message.payload?.subpath ?? '');
+      send({ v: PROTOCOL_VERSION, id: message.id, type: 'fs:data', payload: fsResult });
+      return;
+    }
+    case 'integrations:get': {
+      send({
+        v: PROTOCOL_VERSION,
+        id: message.id,
+        type: 'integrations:data',
+        payload: { integrations: manager.getIntegrations() },
+      });
+      return;
+    }
     case 'exec:stop': {
       await manager.stop();
       send({

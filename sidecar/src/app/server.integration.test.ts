@@ -5,6 +5,8 @@
  * DEEPNOTE_PYTHON. Run with: pnpm test:integration
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -46,6 +48,47 @@ describe.skipIf(!toolkitInstalled)('sidecar end to end (real kernel)', () => {
     });
     expect(failed).toBe(true);
   }, 15_000);
+
+  it('edits a block over WS and persists the change to the file', async () => {
+    // Work on a copy so the shared fixture stays untouched.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dnd-it-'));
+    const copyPath = path.join(dir, 'copy.deepnote');
+    fs.copyFileSync(FIXTURE, copyPath);
+
+    const ws = new WebSocket(`${sidecar.url.replace('http', 'ws')}/ws?token=${TOKEN}`);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('edit test timed out')), 60_000);
+      ws.on('open', () => {
+        ws.send(
+          JSON.stringify({ v: 1, id: 'open', type: 'project:open', payload: { path: copyPath } }),
+        );
+      });
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(String(raw)) as { type: string; payload: Record<string, unknown> };
+        if (msg.type === 'project:data') {
+          ws.send(
+            JSON.stringify({
+              v: 1,
+              id: 'edit',
+              type: 'block:update',
+              payload: { blockId: 'block-sum', content: 'print(21 * 2)' },
+            }),
+          );
+        } else if (msg.type === 'project:updated') {
+          const onDisk = fs.readFileSync(copyPath, 'utf8');
+          expect(onDisk).toContain('print(21 * 2)');
+          clearTimeout(timer);
+          resolve();
+        } else if (msg.type === 'project:error') {
+          clearTimeout(timer);
+          reject(new Error(String(msg.payload.message)));
+        }
+      });
+      ws.on('error', reject);
+    });
+    ws.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }, 90_000);
 
   it('opens a project and streams notebook outputs', async () => {
     const ws = new WebSocket(`${sidecar.url.replace('http', 'ws')}/ws?token=${TOKEN}`);

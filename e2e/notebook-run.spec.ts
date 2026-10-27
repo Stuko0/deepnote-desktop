@@ -81,6 +81,54 @@ test.beforeAll(async () => {
   await new Promise<void>((resolve) => staticServer?.listen(UI_PORT, '127.0.0.1', resolve));
 });
 
+test('edits a block in Monaco, autosaves, and runs the edited code', async ({ page }) => {
+  // Use a copy of the fixture so the shared one stays untouched.
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dnd-e2e-'));
+  const copyPath = path.join(dir, 'copy.deepnote');
+  fs.copyFileSync(FIXTURE, copyPath);
+
+  const url = `http://127.0.0.1:${UI_PORT}/?sidecar=http://127.0.0.1:${sidecarPort}&token=${TOKEN}&project=${encodeURIComponent(copyPath)}`;
+  await page.goto(url);
+  await expect(page.getByText('Hello World')).toBeVisible({ timeout: 30_000 });
+
+  // The second code block renders Monaco; replace its content.
+  const editors = page.locator('.monaco-editor');
+  await expect(editors.first()).toBeVisible({ timeout: 30_000 });
+  await editors.nth(1).click();
+  await page.keyboard.press('Control+a');
+  await page.keyboard.type('print("edited in e2e")');
+
+  // The sidecar persists the edit (debounced) and pushes project:updated;
+  // the header goes back to "saved" and the file on disk changes.
+  await expect(page.getByText('saved')).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(() => fs.readFileSync(copyPath, 'utf8'), { timeout: 30_000 })
+    .toContain('edited in e2e');
+
+  // Run only the edited block via its toolbar button.
+  await page.getByRole('button', { name: 'Run block' }).nth(1).click();
+  await expect(page.getByText('edited in e2e').last()).toBeVisible({ timeout: 180_000 });
+  await expect(page.getByText(/Last run: 1\/1 blocks, 0 failed/)).toBeVisible({ timeout: 60_000 });
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('opens the command palette with ctrl+P', async ({ page }) => {
+  const url = `http://127.0.0.1:${UI_PORT}/?sidecar=http://127.0.0.1:${sidecarPort}&token=${TOKEN}&project=${encodeURIComponent(FIXTURE)}`;
+  await page.goto(url);
+  await expect(page.getByText('Hello World')).toBeVisible({ timeout: 30_000 });
+
+  await page.keyboard.press('Control+p');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.getByText('Run notebook')).toBeVisible();
+  await expect(dialog.getByText('New code block')).toBeVisible();
+  await page.keyboard.press('Escape');
+});
+
 test.afterAll(async () => {
   staticServer?.close();
   sidecar?.kill('SIGTERM');
