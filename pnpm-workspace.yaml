@@ -1,0 +1,12 @@
+packages:
+  - sidecar
+  - frontend
+  - e2e
+
+# Packages whose install scripts pnpm may run. esbuild and biome ship
+# platform binaries via optional deps, so their scripts are a fallback, but
+# pnpm 12 aborts clean installs on skipped build scripts (ERR_PNPM_IGNORED_BUILDS)
+# unless installs pass --config.strict-dep-builds=false (see CI workflow).
+onlyBuiltDependencies:
+  - esbuild
+  - '@biomejs/biome'

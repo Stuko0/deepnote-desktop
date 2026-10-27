@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: lint + typecheck + unit (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --config.strict-dep-builds=false
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build sidecar (smoke)
+        run: pnpm build:sidecar
+
+      # main.go embeds frontend/dist; the checks job does not build the
+      # frontend, and go:embed fails on a missing directory.
+      - name: Prepare embed placeholder
+        shell: bash
+        run: |
+          mkdir -p frontend/dist
+          echo "<!-- placeholder for go:embed -->" > frontend/dist/index.html
+
+      - name: Go build
+        run: go build ./...
+
+  integration:
+    name: integration (real toolkit kernel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --config.strict-dep-builds=false
+
+      - name: Install deepnote toolkit
+        run: pip install "deepnote-toolkit[server]"
+
+      - name: Integration tests
+        env:
+          DEEPNOTE_PYTHON: python
+        run: pnpm test:integration
+
+  e2e:
+    name: e2e (playwright, real kernel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --config.strict-dep-builds=false
+
+      - name: Install deepnote toolkit
+        run: pip install "deepnote-toolkit[server]"
+
+      - name: Build sidecar and frontend
+        run: |
+          pnpm build:sidecar
+          pnpm build:frontend
+
+      - name: Install Playwright browsers
+        run: pnpm --filter @deepnote-desktop/e2e exec playwright install --with-deps chromium
+
+      - name: Run end-to-end tests
+        env:
+          DEEPNOTE_PYTHON: python
+        run: pnpm --filter @deepnote-desktop/e2e test
+
+  desktop-build:
+    name: desktop build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --config.strict-dep-builds=false
+
+      - name: Build sidecar and frontend
+        run: |
+          pnpm build:sidecar
+          pnpm build:frontend
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
+
+      - name: Install Linux webview dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Build desktop app (Linux, webkit2gtk 4.1)
+        if: runner.os == 'Linux'
+        # Wails v2.15 build tag for webkit2gtk-4.1 (verified against the
+        # module source: `#cgo webkit2_41 pkg-config: webkit2gtk-4.1`).
+        # ubuntu-latest (24.04) no longer ships webkit2gtk-4.0.
+        run: wails build -tags webkit2_41
+
+      - name: Build desktop app (Windows)
+        if: runner.os == 'Windows'
+        run: wails build
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepnote-desktop-${{ runner.os }}
+          path: build/bin/*
+          if-no-files-found: error
