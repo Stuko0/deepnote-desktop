@@ -92,6 +92,63 @@ describe.skipIf(!toolkitInstalled)('sidecar end to end (real kernel)', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }, 90_000);
 
+  it('applies an edit that arrives while a project switch is loading to the new project', async () => {
+    const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'dnd-race-a-'));
+    const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'dnd-race-b-'));
+    const pathA = path.join(dirA, 'a.deepnote');
+    const pathB = path.join(dirB, 'b.deepnote');
+    fs.copyFileSync(FIXTURE, pathA);
+    fs.copyFileSync(FIXTURE, pathB);
+
+    const ws = new WebSocket(`${sidecar.url.replace('http', 'ws')}/ws?token=${TOKEN}`);
+    let openedA = false;
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('race test timed out')), 120_000);
+      ws.on('open', () => {
+        ws.send(
+          JSON.stringify({ v: 1, id: 'open-a', type: 'project:open', payload: { path: pathA } }),
+        );
+      });
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(String(raw)) as { type: string; payload: Record<string, unknown> };
+        const project = msg.payload?.project as { path?: string } | null | undefined;
+        if (msg.type === 'project:data' && project?.path === pathA && !openedA) {
+          openedA = true;
+          // Switch to B and send the edit IMMEDIATELY, while open() is still
+          // in flight - the exact interleaving CI hit (edit landed on A).
+          ws.send(
+            JSON.stringify({ v: 1, id: 'open-b', type: 'project:open', payload: { path: pathB } }),
+          );
+          ws.send(
+            JSON.stringify({
+              v: 1,
+              id: 'race-edit',
+              type: 'block:update',
+              payload: { blockId: 'block-sum', content: 'print("edit during switch")\n' },
+            }),
+          );
+        } else if (msg.type === 'project:updated' && openedA) {
+          const updated = msg.payload.project as { path?: string };
+          if (updated.path !== pathB) return;
+          const onB = fs.readFileSync(pathB, 'utf8');
+          const onA = fs.readFileSync(pathA, 'utf8');
+          expect(onB).toContain('edit during switch');
+          expect(onA).not.toContain('edit during switch');
+          clearTimeout(timer);
+          resolve();
+        } else if (msg.type === 'project:error') {
+          clearTimeout(timer);
+          reject(new Error(String(msg.payload.message)));
+        }
+      });
+      ws.on('error', reject);
+    });
+    ws.close();
+    fs.rmSync(dirA, { recursive: true, force: true });
+    fs.rmSync(dirB, { recursive: true, force: true });
+  }, 180_000);
+
   it('creates a terminal and proxies input/output through /terminal', async () => {
     const ws = new WebSocket(`${sidecar.url.replace('http', 'ws')}/ws?token=${TOKEN}`);
     let terminalName = '';

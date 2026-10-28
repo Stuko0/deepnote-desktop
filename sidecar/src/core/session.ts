@@ -90,6 +90,11 @@ export class SessionManager {
     return this.project.file;
   }
 
+  /** Resolves once every queued command has settled (used by the server). */
+  settled(): Promise<unknown> {
+    return this.gate;
+  }
+
   async open(filePath: string): Promise<void> {
     const absolute = path.resolve(filePath);
     // Re-opening the current project must not blank the session: any command
@@ -99,11 +104,7 @@ export class SessionManager {
       return;
     }
     // Load the incoming project first; only then swap and stop the engine.
-    console.error(`[open] loading ${absolute}`);
     const loaded = await loadProject(absolute);
-    console.error(
-      `[open] loaded ${loaded.filePath} (${loaded.model.notebooks[0]?.blocks.length ?? 0} blocks)`,
-    );
     await this.stopEngine('project switched');
     this.project = loaded;
     this.emit({ v: 1, type: 'project:data', payload: { project: this.project.model } });
@@ -139,9 +140,7 @@ export class SessionManager {
     const project = this.currentProject();
     if (!project) throw new Error('no project is open');
     const yaml = serializeDeepnoteFile(project.file);
-    console.error(`[persist] writing ${yaml.length} chars to ${project.filePath}`);
     await fs.writeFile(project.filePath, yaml, 'utf8');
-    console.error(`[persist] wrote ${project.filePath}`);
     // Reload so the client model reflects schema-normalized state.
     const reloaded = await loadProject(project.filePath);
     this.project = { ...reloaded, file: project.file };
@@ -210,6 +209,21 @@ export class SessionManager {
 
   /** Cached DAG per notebook, keyed by the block contents it was computed from. */
   private dagCache = new Map<string, { key: string; dag: DagModel }>();
+
+  /**
+   * Serializes project-touching commands. A client that edits right after
+   * seeing the connection replay (or its own open) used to land on the
+   * previous project while loadProject was still in flight: CI caught it
+   * editing the fixture instead of its copy.
+   */
+  private gate: Promise<unknown> = Promise.resolve();
+
+  /** Queue a command so later ones wait for it (project-switch safety). */
+  enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.gate.then(operation, operation);
+    this.gate = next.catch(() => {});
+    return next;
+  }
 
   /** Upstream/downstream map for a notebook, via the open reactivity DAG. */
   async getDag(notebookId: string): Promise<DagModel> {

@@ -223,189 +223,205 @@ async function handle(
   manager: SessionManager,
   send: (message: ServerMessage) => void,
 ): Promise<void> {
-  switch (message.type) {
-    case 'project:get': {
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'project:data',
-        payload: { project: manager.currentProject()?.model ?? null },
-      });
-      return;
-    }
-    case 'project:open': {
-      await manager.open(message.payload.path);
-      return;
-    }
-    case 'project:close': {
-      await manager.close();
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'project:data',
-        payload: { project: null },
-      });
-      return;
-    }
-    case 'exec:run': {
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'ack',
-        payload: { for: 'exec:run', ok: true },
-      });
-      await manager.run(message.payload ?? {});
-      return;
-    }
-    case 'project:save': {
-      await manager.save();
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'ack',
-        payload: { for: 'project:save', ok: true },
-      });
-      return;
-    }
-    case 'block:update': {
-      await manager.updateBlock(
-        message.payload.blockId,
-        message.payload.content,
-        message.payload.metadata,
-      );
-      return;
-    }
-    case 'block:create': {
-      const createPayload = message.payload;
-      await manager.createBlock(
-        createPayload.notebookId,
-        createPayload.afterBlockId,
-        createPayload.blockType,
-      );
-      return;
-    }
-    case 'block:delete': {
-      await manager.deleteBlock(message.payload.blockId);
-      return;
-    }
-    case 'block:move': {
-      await manager.moveBlock(message.payload.blockId, message.payload.direction);
-      return;
-    }
-    case 'dag:get': {
-      const notebookId = message.payload.notebookId;
-      try {
-        const dag = await manager.getDag(notebookId);
+  // Every command runs inside the session queue, in frame order: an edit sent
+  // right after seeing the replay (or its own open) must not land on the
+  // previous project while open() is still loading. CI caught that race by
+  // editing the fixture instead of the test's copy.
+  return manager.enqueue(async () => {
+    switch (message.type) {
+      case 'project:get': {
         send({
           v: PROTOCOL_VERSION,
           id: message.id,
-          type: 'dag:data',
-          payload: { notebookId, dag },
+          type: 'project:data',
+          payload: { project: manager.currentProject()?.model ?? null },
         });
-      } catch (error) {
-        send({
-          v: PROTOCOL_VERSION,
-          id: message.id,
-          type: 'dag:data',
-          payload: {
-            notebookId,
-            dag: null,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        });
+        return;
       }
-      return;
-    }
-    case 'fs:list': {
-      const fsResult = await manager.listFiles(message.payload?.subpath ?? '');
-      send({ v: PROTOCOL_VERSION, id: message.id, type: 'fs:data', payload: fsResult });
-      return;
-    }
-    case 'integrations:get':
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'integrations:data',
-        payload: { integrations: manager.getIntegrations() },
-      });
-      return;
-    case 'cloud:status': {
-      const status = await fetchCloudStatus({ env: manager.cloudEnv() });
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'cloud:data',
-        payload: { kind: 'status', ...status },
-      });
-      return;
-    }
-    case 'cloud:run': {
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'ack',
-        payload: { for: 'cloud:run', ok: true },
-      });
-      const result = await runNotebookInCloud(message.payload.notebookId, {
-        env: manager.cloudEnv(),
-        onStatus: (status) => {
+      case 'project:open': {
+        await manager.open(message.payload.path);
+        return;
+      }
+      case 'project:close': {
+        await manager.close();
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'project:data',
+          payload: { project: null },
+        });
+        return;
+      }
+      case 'exec:run': {
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'ack',
+          payload: { for: 'exec:run', ok: true },
+        });
+        await manager.run(message.payload ?? {});
+        return;
+      }
+      case 'project:save': {
+        await manager.save();
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'ack',
+          payload: { for: 'project:save', ok: true },
+        });
+        return;
+      }
+      case 'block:update': {
+        await manager.updateBlock(
+          message.payload.blockId,
+          message.payload.content,
+          message.payload.metadata,
+        );
+        return;
+      }
+      case 'block:create': {
+        const createPayload = message.payload;
+        await manager.createBlock(
+          createPayload.notebookId,
+          createPayload.afterBlockId,
+          createPayload.blockType,
+        );
+        return;
+      }
+      case 'block:delete': {
+        await manager.deleteBlock(message.payload.blockId);
+        return;
+      }
+      case 'block:move': {
+        await manager.moveBlock(message.payload.blockId, message.payload.direction);
+        return;
+      }
+      case 'dag:get': {
+        const notebookId = message.payload.notebookId;
+        try {
+          const dag = await manager.getDag(notebookId);
           send({
             v: PROTOCOL_VERSION,
             id: message.id,
-            type: 'cloud:data',
-            payload: { kind: 'run', log: status },
+            type: 'dag:data',
+            payload: { notebookId, dag },
           });
-        },
-      });
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'cloud:data',
-        payload: { kind: 'run', configured: true, run: result },
-      });
-      return;
+        } catch (error) {
+          send({
+            v: PROTOCOL_VERSION,
+            id: message.id,
+            type: 'dag:data',
+            payload: {
+              notebookId,
+              dag: null,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+        return;
+      }
+      case 'fs:list': {
+        const fsResult = await manager.listFiles(message.payload?.subpath ?? '');
+        send({ v: PROTOCOL_VERSION, id: message.id, type: 'fs:data', payload: fsResult });
+        return;
+      }
+      case 'integrations:get':
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'integrations:data',
+          payload: { integrations: manager.getIntegrations() },
+        });
+        return;
+      case 'cloud:status': {
+        const status = await fetchCloudStatus({ env: manager.cloudEnv() });
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'cloud:data',
+          payload: { kind: 'status', ...status },
+        });
+        return;
+      }
+      case 'cloud:run': {
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'ack',
+          payload: { for: 'cloud:run', ok: true },
+        });
+        const result = await runNotebookInCloud(message.payload.notebookId, {
+          env: manager.cloudEnv(),
+          onStatus: (status) => {
+            send({
+              v: PROTOCOL_VERSION,
+              id: message.id,
+              type: 'cloud:data',
+              payload: { kind: 'run', log: status },
+            });
+          },
+        });
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'cloud:data',
+          payload: { kind: 'run', configured: true, run: result },
+        });
+        return;
+      }
+      case 'terminal:list': {
+        const terminals = await manager.listTerminals().catch(() => []);
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'terminals:data',
+          payload: { terminals },
+        });
+        return;
+      }
+      case 'terminal:create': {
+        const name = await manager.createTerminal();
+        const terminals = await manager.listTerminals().catch(() => [name]);
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'terminals:data',
+          payload: { terminals },
+        });
+        return;
+      }
+      case 'secrets:set':
+        await manager.setSecret(message.payload.envVar, message.payload.value);
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'integrations:data',
+          payload: { integrations: manager.getIntegrations() },
+        });
+        return;
+      case 'exec:stop':
+        await manager.stop();
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'ack',
+          payload: { for: 'exec:stop', ok: true },
+        });
+        return;
+      case 'kernel:restart':
+        await manager.restartKernel();
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'ack',
+          payload: { for: 'kernel:restart', ok: true },
+        });
+        return;
+      default: {
+        const exhaustive: never = message;
+        void exhaustive;
+      }
     }
-    case 'terminal:list': {
-      const terminals = await manager.listTerminals().catch(() => []);
-      send({ v: PROTOCOL_VERSION, id: message.id, type: 'terminals:data', payload: { terminals } });
-      return;
-    }
-    case 'terminal:create': {
-      const name = await manager.createTerminal();
-      const terminals = await manager.listTerminals().catch(() => [name]);
-      send({ v: PROTOCOL_VERSION, id: message.id, type: 'terminals:data', payload: { terminals } });
-      return;
-    }
-    case 'secrets:set':
-      await manager.setSecret(message.payload.envVar, message.payload.value);
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'integrations:data',
-        payload: { integrations: manager.getIntegrations() },
-      });
-      return;
-    case 'exec:stop':
-      await manager.stop();
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'ack',
-        payload: { for: 'exec:stop', ok: true },
-      });
-      return;
-    case 'kernel:restart':
-      await manager.restartKernel();
-      send({
-        v: PROTOCOL_VERSION,
-        id: message.id,
-        type: 'ack',
-        payload: { for: 'kernel:restart', ok: true },
-      });
-      return;
-    default: {
-      const exhaustive: never = message;
-      void exhaustive;
-    }
-  }
+  });
 }
