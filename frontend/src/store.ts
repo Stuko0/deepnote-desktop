@@ -25,7 +25,24 @@ export interface BlockRuntimeState {
   agentTools?: string[];
 }
 
-interface AppState {
+export type WorkspaceView =
+  /** Home dashboard: greeting, recently visited, getting started. */
+  | { kind: 'home' }
+  /** Project list with tabs (recent/private/shared/all). */
+  | { kind: 'projects'; tab: 'recent' | 'private' | 'shared' | 'all' }
+  /** Workspace integrations table + catalog. */
+  | { kind: 'integrations' }
+  /** Workspace settings with member management tabs. */
+  | {
+      kind: 'settings';
+      tab: 'members' | 'groups' | 'workspace' | 'security' | 'ai' | 'project-settings' | 'billing';
+    }
+  /** Deleted projects. */
+  | { kind: 'trash' }
+  /** The notebook editor (project open). */
+  | { kind: 'project' };
+
+export interface AppState {
   connection: 'connecting' | 'online' | 'offline';
   project: ProjectModel | null;
   selectedNotebookId: string | null;
@@ -42,6 +59,11 @@ interface AppState {
   terminals: string[];
   paletteOpen: boolean;
   dagOpen: boolean;
+  view: WorkspaceView;
+  /** Local projects opened before (most recent first), capped at 30. */
+  recentProjects: string[];
+  navigate: (view: WorkspaceView) => void;
+  markProjectOpened: (filePath: string) => void;
   cloud: {
     configured?: boolean;
     baseUrl?: string;
@@ -61,6 +83,7 @@ interface AppState {
 
   init: (url: string, token: string) => void;
   openProject: (path: string) => void;
+  createProject: (path: string) => void;
   runNotebook: (notebookId?: string) => void;
   runBlocks: (blockIds: string[]) => void;
   stopRun: () => void;
@@ -94,7 +117,8 @@ const EDIT_DEBOUNCE_MS = 1500;
 
 function reduceMessage(state: AppState, message: ServerMessage): Partial<AppState> | null {
   switch (message.type) {
-    case 'project:data':
+    case 'project:data': {
+      const openedPath = message.payload.project?.path;
       return {
         project: message.payload.project,
         selectedNotebookId: message.payload.project?.notebooks[0]?.id ?? null,
@@ -106,7 +130,13 @@ function reduceMessage(state: AppState, message: ServerMessage): Partial<AppStat
             ]),
           ),
         ),
+        // A loaded project switches the shell to the editor view.
+        view: message.payload.project ? ({ kind: 'project' } as const) : state.view,
+        recentProjects: openedPath
+          ? [openedPath, ...state.recentProjects.filter((p) => p !== openedPath)].slice(0, 30)
+          : state.recentProjects,
       };
+    }
     case 'project:updated': {
       const project = message.payload.project;
       // Keep live outputs for blocks that already ran in this session.
@@ -238,6 +268,17 @@ function reduceMessage(state: AppState, message: ServerMessage): Partial<AppStat
   }
 }
 
+const RECENTS_KEY = 'dnd.recents';
+
+function loadRecents(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? '[]') as unknown;
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   connection: 'connecting',
   project: null,
@@ -254,6 +295,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   terminals: [],
   paletteOpen: false,
   dagOpen: false,
+  view: { kind: 'home' },
+  recentProjects: loadRecents(),
   cloud: { running: false },
   saveState: 'saved',
 
@@ -269,6 +312,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openProject(path: string): void {
     connection?.send('project:open', { path });
+  },
+
+  createProject(path: string): void {
+    if (!path.trim()) return;
+    connection?.send('project:create', { path: path.trim() });
   },
 
   runNotebook(notebookId?: string): void {
@@ -362,6 +410,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   moveBlock(blockId: string, direction: 'up' | 'down'): void {
     connection?.send('block:move', { blockId, direction });
+  },
+
+  navigate(view: WorkspaceView): void {
+    set({ view });
+  },
+
+  markProjectOpened(filePath: string): void {
+    const recents = [filePath, ...get().recentProjects.filter((p) => p !== filePath)].slice(0, 30);
+    set({ recentProjects: recents, view: { kind: 'project' } });
+    try {
+      localStorage.setItem('dnd.recents', JSON.stringify(recents));
+    } catch {
+      // private mode / storage disabled: recents stay in memory only
+    }
   },
 
   refreshDag(): void {

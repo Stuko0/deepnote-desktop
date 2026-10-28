@@ -25,6 +25,12 @@ import { type Command, CommandPalette } from './components/CommandPalette';
 import { DagGraph } from './components/DagPanel';
 import { FilesPanel, IntegrationsPanel } from './components/SidePanels';
 import { TerminalPanel } from './components/TerminalPanel';
+import { HomeView } from './shell/HomeView';
+import { IntegrationsView } from './shell/IntegrationsView';
+import { ProjectsView } from './shell/ProjectsView';
+import { SettingsView } from './shell/SettingsView';
+import { TrashView } from './shell/TrashView';
+import { WorkspaceSidebar } from './shell/WorkspaceSidebar';
 import { useAppStore } from './store';
 import './monaco';
 
@@ -206,6 +212,23 @@ export function App() {
           downstream: dag.downstream[selectedBlockId] ?? [],
         }
       : undefined;
+
+  // Workspace shell: every non-editor view renders the navigation shell.
+  if (store.view.kind !== 'project') {
+    const openInShell = () => openProject(window.prompt('Path to .deepnote file:') ?? '');
+    return (
+      <HStack minH="100vh" align="stretch" spacing={0} bg="gray.100">
+        <WorkspaceSidebar onOpenProject={openInShell} />
+        <Box flex="1" overflowY="auto" p={{ base: 4, md: 8 }} bg="white">
+          {store.view.kind === 'home' && <HomeView />}
+          {store.view.kind === 'projects' && <ProjectsView tab={store.view.tab} />}
+          {store.view.kind === 'integrations' && <IntegrationsView />}
+          {store.view.kind === 'settings' && <SettingsView tab={store.view.tab} />}
+          {store.view.kind === 'trash' && <TrashView />}
+        </Box>
+      </HStack>
+    );
+  }
 
   return (
     <Box minH="100vh" bg="gray.50">
