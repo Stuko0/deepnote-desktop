@@ -79,6 +79,7 @@ export interface IntegrationStatusModel {
 
 export type ClientMessage =
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'project:open'; payload: { path: string } }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'project:create'; payload: { path: string } }
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'project:close' }
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'project:get' }
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'project:save' }

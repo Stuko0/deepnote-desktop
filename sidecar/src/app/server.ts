@@ -9,7 +9,10 @@
  * secondary windows).
  */
 
+import crypto from 'node:crypto';
+import fsSync, { promises as fsPromises } from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
 import type { Duplex } from 'node:stream';
 import { parse as parseUrl } from 'node:url';
 import { WebSocketServer, WebSocket as WsClient } from 'ws';
@@ -235,6 +238,56 @@ async function handle(
           id: message.id,
           type: 'project:data',
           payload: { project: manager.currentProject()?.model ?? null },
+        });
+        return;
+      }
+      case 'project:create': {
+        const target = path.resolve(
+          message.payload.path.endsWith('.deepnote')
+            ? message.payload.path
+            : `${message.payload.path}.deepnote`,
+        );
+        if (fsSync.existsSync(target)) {
+          send({
+            v: PROTOCOL_VERSION,
+            id: message.id,
+            type: 'project:error',
+            payload: { message: `file already exists: ${target}` },
+          });
+          return;
+        }
+        const scaffold = {
+          metadata: { createdAt: new Date().toISOString(), modifiedAt: new Date().toISOString() },
+          version: '1',
+          project: {
+            id: crypto.randomUUID(),
+            name: path.basename(target, '.deepnote'),
+            notebooks: [
+              {
+                id: `notebook-${crypto.randomUUID().slice(0, 8)}`,
+                name: 'Notebook',
+                blocks: [
+                  {
+                    id: `block-${crypto.randomUUID().slice(0, 8)}`,
+                    type: 'markdown',
+                    sortingKey: '000000',
+                    blockGroup: `group-${crypto.randomUUID().slice(0, 8)}`,
+                    content: `# ${path.basename(target, '.deepnote')}`,
+                    metadata: {},
+                  },
+                ],
+              },
+            ],
+          },
+        };
+        await fsPromises.mkdir(path.dirname(target), { recursive: true });
+        await fsPromises.writeFile(target, `${JSON.stringify(scaffold, null, 2)}\n`, 'utf8');
+        await manager.open(target);
+        send({
+          v: PROTOCOL_VERSION,
+          id: message.id,
+          type: 'ack',
+          payload: { for: 'project:create', ok: true },
         });
         return;
       }

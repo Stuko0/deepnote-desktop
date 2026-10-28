@@ -84,6 +84,51 @@ test.beforeAll(async () => {
 // Runs first on purpose: the AST analyzer hangs after a previous test has
 // exercised a run in the same sidecar (upstream, not reproducible outside
 // the suite). Opening the graph on a fresh sidecar is covered here.
+test('navigates the workspace shell across all views', async ({ page }) => {
+  const url = `http://127.0.0.1:${UI_PORT}/?sidecar=http://127.0.0.1:${sidecarPort}&token=${TOKEN}`;
+  await page.goto(url);
+
+  // Home
+  await expect(page.getByText('What should we build next?')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('Getting started', { exact: true })).toBeVisible();
+  await expect(page.getByText(/\d+ \/ 5 completed/)).toBeVisible();
+
+  // Integrations view: workspace section + catalog with filters
+  await page.getByRole('button', { name: 'Integrations', exact: true }).first().click();
+  await expect(page.getByText('Workspace integrations', { exact: true })).toBeVisible();
+  await expect(page.getByText('Data warehouses & lakes', { exact: true }).first()).toBeVisible();
+  await expect(page.getByPlaceholder('Search integrations')).toBeVisible();
+
+  // Settings: full tab set
+  await page.getByRole('button', { name: 'Settings & members' }).click();
+  await expect(page.getByText('Invite members', { exact: true })).toBeVisible({ timeout: 10_000 });
+  for (const tab of [
+    'Groups',
+    'Workspace',
+    'Security',
+    'AI',
+    'Project settings',
+    'Billing & usage',
+  ]) {
+    await expect(page.getByRole('tab', { name: tab })).toBeVisible();
+  }
+  await page.getByRole('tab', { name: 'Project settings' }).click();
+  await expect(page.getByText('Open a project to see its settings.')).toBeVisible();
+
+  // Projects tabs
+  await page.getByRole('button', { name: 'All projects', exact: true }).click();
+  await expect(page.getByLabel('Sort projects')).toBeVisible();
+  await expect(page.getByLabel('Sort projects')).toContainText('Last opened by me');
+  await expect(page.getByText('Data pipelines')).toBeVisible();
+  await page.getByRole('button', { name: 'Shared with me' }).click();
+  await expect(page.getByText(/Shared projects come from Deepnote Cloud/)).toBeVisible();
+
+  // Trash
+  await page.getByRole('button', { name: 'Trash' }).click();
+  await expect(page.getByText('No deleted projects', { exact: true })).toBeVisible();
+  await expect(page.getByText(/kept for/).first()).toBeVisible();
+});
+
 test('opens the dependency graph from the palette', async ({ page }) => {
   const url = `http://127.0.0.1:${UI_PORT}/?sidecar=http://127.0.0.1:${sidecarPort}&token=${TOKEN}&project=${encodeURIComponent(FIXTURE)}`;
   await page.goto(url);
