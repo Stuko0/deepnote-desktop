@@ -255,12 +255,19 @@ export function BlockView({
   dagInfo,
 }: {
   block: BlockModel;
-  state?: { running: boolean; outputs: IOutput[]; durationMs?: number };
+  state?: {
+    running: boolean;
+    outputs: IOutput[];
+    durationMs?: number;
+    agentText?: string;
+    agentTools?: string[];
+  };
   handlers: BlockHandlers;
   dagInfo?: { upstream: string[]; downstream: string[] };
 }) {
   const isMarkdown = block.type === 'markdown' || block.type.startsWith('text-cell');
   const isInput = block.type.startsWith('input-');
+  const isAgent = block.type === 'agent';
   const running = state?.running ?? false;
   const editorHeight = useMemo(
     () => Math.min(480, Math.max(48, (block.content.split('\n').length + 1) * 19)),
@@ -386,7 +393,55 @@ export function BlockView({
         </HStack>
       </HStack>
 
-      {isMarkdown ? (
+      {isAgent ? (
+        <VStack align="stretch" spacing={2}>
+          <Box
+            as="textarea"
+            value={block.content}
+            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
+              handlers.onEdit(block.id, e.target.value)
+            }
+            w="100%"
+            minH={60}
+            p={2}
+            borderRadius="md"
+            borderWidth="1px"
+            borderColor="transparent"
+            _hover={{ borderColor: 'purple.200' }}
+            _focus={{ borderColor: 'brand.500', outline: 'none' }}
+            fontSize="sm"
+            color="gray.700"
+            resize="vertical"
+            placeholder="Describe the task for the agent..."
+          />
+          {state?.agentText ? (
+            <Box
+              bg="purple.50"
+              borderLeftWidth="1px"
+              borderLeftColor="brand.500"
+              p={3}
+              borderRadius="md"
+            >
+              <Text fontSize="xs" color="brand.600" mb={1} fontWeight="semibold">
+                Agent
+              </Text>
+              <Text fontSize="sm" whiteSpace="pre-wrap" color="gray.700">
+                {state.agentText}
+              </Text>
+            </Box>
+          ) : null}
+          {(state?.agentTools ?? []).length > 0 && (
+            <VStack align="stretch" spacing={1}>
+              {(state?.agentTools ?? []).map((tool, index) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: append-only tool log, tool names can repeat
+                <Text key={`${tool}-${index}`} fontSize="xs" color="gray.500" fontFamily="mono">
+                  {tool}
+                </Text>
+              ))}
+            </VStack>
+          )}
+        </VStack>
+      ) : isMarkdown ? (
         <Box
           as="textarea"
           value={block.content}

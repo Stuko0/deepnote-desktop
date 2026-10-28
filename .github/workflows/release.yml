@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build + package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --config.strict-dep-builds=false
+
+      - name: Build sidecar and frontend
+        run: |
+          pnpm build:sidecar
+          pnpm build:frontend
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
+
+      - name: Install Linux webview dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Install NSIS (Windows installer)
+        if: runner.os == 'Windows'
+        run: choco install nsis -y --no-progress
+
+      - name: Build desktop app (Linux, webkit2gtk 4.1)
+        if: runner.os == 'Linux'
+        run: wails build -tags webkit2_41
+
+      - name: Build desktop app with NSIS installer (Windows)
+        if: runner.os == 'Windows'
+        run: wails build -nsis
+
+      - name: Package Linux tarball with checksums
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          STAGE="dist/${VERSION}-linux-amd64"
+          mkdir -p "$STAGE"
+          cp build/bin/deepnote-desktop "$STAGE/"
+          cp README.md LICENSE "$STAGE/"
+          tar -czf "dist/deepnote-desktop-${VERSION}-linux-amd64.tar.gz" -C dist "${VERSION}-linux-amd64"
+          (cd dist && sha256sum "deepnote-desktop-${VERSION}-linux-amd64.tar.gz" > checksums-linux.txt)
+
+      - name: Package Windows artifacts with checksums
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          cp build/bin/deepnote-desktop.exe "dist/deepnote-desktop-${VERSION}-windows-amd64.exe" 2>/dev/null || \
+            cp build/bin/deepnote-desktop.exe dist/
+          if [ -f build/bin/installer.exe ]; then cp build/bin/installer.exe "dist/deepnote-desktop-${VERSION}-windows-setup.exe"; fi
+          (cd dist && sha256sum ./* > ../checksums-windows.txt && mv ../checksums-windows.txt .)
+
+      - name: Smoke test the binary
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a timeout 12s build/bin/deepnote-desktop &
+            PID=$!
+            sleep 6
+            if kill -0 $PID 2>/dev/null; then
+              echo "binary is alive after 6s"
+              kill $PID 2>/dev/null || true
+            else
+              echo "binary exited early"; wait $PID; exit 1
+            fi
+          else
+            (./build/bin/deepnote-desktop.exe &) && sleep 6 && tasklist //FI "IMAGENAME eq deepnote-desktop.exe" | grep -q deepnote-desktop && echo "binary is alive after 6s"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepnote-desktop-${{ runner.os }}
+          path: |
+            dist/*
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "deepnote-desktop $GITHUB_REF_NAME" \
+            --generate-notes \
+            artifacts/*

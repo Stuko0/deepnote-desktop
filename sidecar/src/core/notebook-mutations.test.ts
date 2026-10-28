@@ -47,7 +47,7 @@ describe('notebook mutations', () => {
     const file = freshFile();
     const { blockId } = createBlockAfter(file, 'notebook-hello', 'block-print', 'code');
     const ids = blockIds(file);
-    expect(ids).toEqual(['block-intro', 'block-print', blockId, 'block-sum']);
+    expect(ids).toEqual(['block-intro', 'block-print', blockId, 'block-sum', 'block-double']);
     const keys = file.project.notebooks[0].blocks.map((b) => b.sortingKey);
     expect([...keys].sort()).toEqual(keys);
   });
@@ -61,7 +61,7 @@ describe('notebook mutations', () => {
   it('deletes a block and reindexes', () => {
     const file = freshFile();
     deleteBlock(file, 'block-print');
-    expect(blockIds(file)).toEqual(['block-intro', 'block-sum']);
+    expect(blockIds(file)).toEqual(['block-intro', 'block-sum', 'block-double']);
     const keys = file.project.notebooks[0].blocks.map((b) => b.sortingKey);
     expect([...keys].sort()).toEqual(keys);
   });
@@ -69,7 +69,7 @@ describe('notebook mutations', () => {
   it('moves a block up and down within bounds', () => {
     const file = freshFile();
     moveBlock(file, 'block-sum', 'up');
-    expect(blockTypes(file)).toEqual(['markdown', 'code', 'code']);
+    expect(blockTypes(file)).toEqual(['markdown', 'code', 'code', 'code']);
     expect(blockIds(file)[2]).toBe('block-print');
     moveBlock(file, 'block-sum', 'up');
     expect(blockIds(file)[0]).toBe('block-sum');

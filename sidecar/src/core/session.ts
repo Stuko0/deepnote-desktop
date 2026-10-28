@@ -58,6 +58,13 @@ export class SessionManager {
   private kernelState: KernelState = 'stopped';
   private running = false;
   private abort: AbortController | null = null;
+  /** Integration secrets (env vars) held in memory for the next engine start. */
+  private secrets = new Map<string, string>();
+
+  /** Environment for cloud calls: session secrets take precedence over process env. */
+  cloudEnv(): Record<string, string | undefined> {
+    return { ...process.env, ...Object.fromEntries(this.secrets) };
+  }
 
   constructor(private readonly emit: Emit) {}
 
@@ -67,6 +74,10 @@ export class SessionManager {
 
   get isRunning(): boolean {
     return this.running;
+  }
+
+  get state(): KernelState {
+    return this.kernelState;
   }
 
   private setKernelState(state: KernelState, detail?: string): void {
@@ -79,10 +90,45 @@ export class SessionManager {
     return this.project.file;
   }
 
+  /** Resolves once every queued command has settled (used by the server). */
+  settled(): Promise<unknown> {
+    return this.gate;
+  }
+
   async open(filePath: string): Promise<void> {
-    await this.close();
-    this.project = await loadProject(filePath);
+    const absolute = path.resolve(filePath);
+    // Re-opening the current project must not blank the session: any command
+    // arriving during a reload would otherwise fail with "no project is open".
+    if (this.project?.filePath === absolute) {
+      this.emit({ v: 1, type: 'project:data', payload: { project: this.project.model } });
+      return;
+    }
+    // Load the incoming project first; only then swap and stop the engine.
+    const loaded = await loadProject(absolute);
+    await this.stopEngine('project switched');
+    this.project = loaded;
     this.emit({ v: 1, type: 'project:data', payload: { project: this.project.model } });
+    // Warm the DAG cache in the background: the analyzer spawns python per
+    // call, so opening the graph later should be a cache hit.
+    void this.prewarmDag();
+  }
+
+  /** Best-effort background DAG analysis for every notebook of the open project. */
+  private prewarmDag(): void {
+    const project = this.project;
+    if (!project) return;
+    for (const notebook of project.file.project.notebooks) {
+      void this.getDag(notebook.id).catch((error: unknown) => {
+        this.emit({
+          v: 1,
+          type: 'log',
+          payload: {
+            level: 'warn',
+            message: `dag prewarm failed: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        });
+      });
+    }
   }
 
   currentProject(): LoadedProject | null {
@@ -103,6 +149,22 @@ export class SessionManager {
 
   async save(): Promise<void> {
     await this.persist();
+  }
+
+  /** Set (or clear, with null) an integration secret; restarts a warm kernel so it applies. */
+  async setSecret(envVar: string, value: string | null): Promise<void> {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(envVar)) throw new Error(`invalid env var name: ${envVar}`);
+    const previous = this.secrets.get(envVar);
+    if (value === null) this.secrets.delete(envVar);
+    else this.secrets.set(envVar, value);
+    if (this.engine && previous !== value) {
+      await this.restartKernel();
+      this.emit({
+        v: 1,
+        type: 'log',
+        payload: { level: 'info', message: 'kernel restarted to apply integration secrets' },
+      });
+    }
   }
 
   async updateBlock(
@@ -145,6 +207,24 @@ export class SessionManager {
     await this.persist();
   }
 
+  /** Cached DAG per notebook, keyed by the block contents it was computed from. */
+  private dagCache = new Map<string, { key: string; dag: DagModel }>();
+
+  /**
+   * Serializes project-touching commands. A client that edits right after
+   * seeing the connection replay (or its own open) used to land on the
+   * previous project while loadProject was still in flight: CI caught it
+   * editing the fixture instead of its copy.
+   */
+  private gate: Promise<unknown> = Promise.resolve();
+
+  /** Queue a command so later ones wait for it (project-switch safety). */
+  enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.gate.then(operation, operation);
+    this.gate = next.catch(() => {});
+    return next;
+  }
+
   /** Upstream/downstream map for a notebook, via the open reactivity DAG. */
   async getDag(notebookId: string): Promise<DagModel> {
     const project = this.currentProject();
@@ -152,7 +232,18 @@ export class SessionManager {
     const notebook = project.file.project.notebooks.find((n) => n.id === notebookId);
     if (!notebook) throw new Error(`notebook ${notebookId} not found`);
 
-    const { dag } = await getDagForBlocks(notebook.blocks);
+    // The analyzer spawns python per call; hash the contents so repeated
+    // opens of the graph do not re-analyze (or re-hit a hung analyzer).
+    const contentsKey = JSON.stringify(notebook.blocks.map((b) => [b.id, b.content]));
+    const cached = this.dagCache.get(notebookId);
+    if (cached?.key === contentsKey) return cached.dag;
+
+    const { dag } = await Promise.race([
+      getDagForBlocks(notebook.blocks),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('dag analysis timed out')), 20_000),
+      ),
+    ]);
     const upstream: Record<string, string[]> = {};
     const downstream: Record<string, string[]> = {};
     for (const node of dag.nodes) {
@@ -163,7 +254,7 @@ export class SessionManager {
       upstream[edge.to]?.push(edge.from);
       downstream[edge.from]?.push(edge.to);
     }
-    return {
+    const model: DagModel = {
       edges: dag.edges.map((edge: { from: string; to: string }) => ({
         from: edge.from,
         to: edge.to,
@@ -171,6 +262,8 @@ export class SessionManager {
       upstream,
       downstream,
     };
+    this.dagCache.set(notebookId, { key: contentsKey, dag: model });
+    return model;
   }
 
   /** List files in the project working directory (no traversal outside it). */
@@ -208,6 +301,26 @@ export class SessionManager {
       (a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name),
     );
     return { subpath, entries };
+  }
+
+  /** Base URL of the toolkit's Jupyter server (available once the engine runs). */
+  toolkitUrl(): string {
+    if (!this.engine?.serverPort) throw new Error('kernel is not running yet');
+    return `http://127.0.0.1:${this.engine.serverPort}`;
+  }
+
+  async listTerminals(): Promise<string[]> {
+    const res = await fetch(`${this.toolkitUrl()}/api/terminals`);
+    if (!res.ok) throw new Error(`terminals API returned ${res.status}`);
+    const body = (await res.json()) as Array<{ name: string }>;
+    return body.map((t) => t.name);
+  }
+
+  async createTerminal(): Promise<string> {
+    const res = await fetch(`${this.toolkitUrl()}/api/terminals`, { method: 'POST' });
+    if (!res.ok) throw new Error(`terminal create returned ${res.status}`);
+    const body = (await res.json()) as { name: string };
+    return body.name;
   }
 
   /** Project integrations and whether their env vars are present. */
@@ -253,7 +366,10 @@ export class SessionManager {
     const engine = new ExecutionEngine({
       pythonEnv: resolved.pythonPath,
       workingDirectory: project.workingDirectory,
-      env: { DEEPNOTE_RUNTIME__RUNNING_IN_DETACHED_MODE: 'true' },
+      env: {
+        DEEPNOTE_RUNTIME__RUNNING_IN_DETACHED_MODE: 'true',
+        ...Object.fromEntries(this.secrets),
+      },
     });
     await engine.start();
     this.engine = engine;
@@ -337,6 +453,9 @@ export class SessionManager {
         },
         onOutput: (blockId, output) => {
           this.emit({ v: 1, type: 'exec:output', payload: { blockId, output } });
+        },
+        onAgentEvent: (event) => {
+          this.emit({ v: 1, type: 'agent:event', payload: { event } });
         },
         onBlockDone: (result) => {
           const existing = collected.get(result.blockId);

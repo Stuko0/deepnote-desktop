@@ -16,6 +16,7 @@ export type ExecutionMode = 'block' | 'downstream';
 export type NewBlockKind =
   | 'code'
   | 'sql'
+  | 'agent'
   | 'markdown'
   | 'input-text'
   | 'input-textarea'
@@ -114,8 +115,18 @@ export type ClientMessage =
       payload: { blockId: string; direction: 'up' | 'down' };
     }
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'dag:get'; payload: { notebookId: string } }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'terminal:list' }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'cloud:status' }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'cloud:run'; payload: { notebookId: string } }
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'terminal:create' }
   | { v: typeof PROTOCOL_VERSION; id: string; type: 'fs:list'; payload: { subpath?: string } }
-  | { v: typeof PROTOCOL_VERSION; id: string; type: 'integrations:get' };
+  | { v: typeof PROTOCOL_VERSION; id: string; type: 'integrations:get' }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id: string;
+      type: 'secrets:set';
+      payload: { envVar: string; value: string | null };
+    };
 
 export type ServerMessage =
   | {
@@ -147,6 +158,32 @@ export type ServerMessage =
       id?: string;
       type: 'integrations:data';
       payload: { integrations: IntegrationStatusModel[] };
+    }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id?: string;
+      type: 'terminals:data';
+      payload: { terminals: string[] };
+    }
+  | {
+      v: typeof PROTOCOL_VERSION;
+      id?: string;
+      type: 'cloud:data';
+      payload: {
+        kind: 'status' | 'run';
+        configured?: boolean;
+        baseUrl?: string;
+        workspace?: { name: string; slug?: string };
+        error?: string;
+        run?: {
+          runId: string;
+          status: string;
+          success: boolean;
+          error?: string;
+          snapshotSaved?: boolean;
+        };
+        log?: string;
+      };
     }
   | {
       v: typeof PROTOCOL_VERSION;
@@ -193,6 +230,17 @@ export type ServerMessage =
     }
   | {
       v: typeof PROTOCOL_VERSION;
+      type: 'agent:event';
+      payload: {
+        event:
+          | { type: 'text_delta'; text: string }
+          | { type: 'reasoning_delta'; text: string }
+          | { type: 'tool_called'; toolName: string }
+          | { type: 'tool_output'; toolName: string; output: string };
+      };
+    }
+  | {
+      v: typeof PROTOCOL_VERSION;
       type: 'log';
       payload: { level: 'info' | 'warn' | 'error'; message: string };
     };
@@ -212,6 +260,11 @@ const CLIENT_TYPES = new Set([
   'dag:get',
   'fs:list',
   'integrations:get',
+  'terminal:list',
+  'cloud:status',
+  'cloud:run',
+  'terminal:create',
+  'secrets:set',
 ]);
 
 /** Parse and validate a raw client frame. Returns null when the frame is invalid. */

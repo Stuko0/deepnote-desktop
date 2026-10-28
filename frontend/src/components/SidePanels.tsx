@@ -1,7 +1,18 @@
 /** Sidebar panels: project files explorer and integrations status. */
 
 import { ArrowBackIcon, ChevronRightIcon, DownloadIcon } from '@chakra-ui/icons';
-import { Box, Button, Code, HStack, IconButton, Text, VStack } from '@chakra-ui/react';
+import {
+  Box,
+  Button,
+  Code,
+  HStack,
+  IconButton,
+  Input,
+  Select,
+  Text,
+  VStack,
+} from '@chakra-ui/react';
+import { useState } from 'react';
 
 import type { FileEntryModel, IntegrationStatusModel } from '../protocol';
 
@@ -87,10 +98,15 @@ export function FilesPanel({
 export function IntegrationsPanel({
   integrations,
   onRefresh,
+  onSetSecret,
 }: {
   integrations: IntegrationStatusModel[];
   onRefresh: () => void;
+  onSetSecret: (envVar: string, value: string | null) => void;
 }) {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [provider, setProvider] = useState<'openai' | 'anthropic'>('openai');
+  const [aiKey, setAiKey] = useState('');
   return (
     <Box mt={4}>
       <HStack justify="space-between" mb={1}>
@@ -121,11 +137,73 @@ export function IntegrationsPanel({
               {integration.envVar}
             </Code>
             <Text fontSize="xs" mt={1} color={integration.configured ? 'green.600' : 'red.500'}>
-              {integration.configured ? 'configured in environment' : 'missing from environment'}
+              {integration.configured
+                ? 'configured for this session'
+                : 'missing: set it below or export it before launching'}
             </Text>
+            <HStack mt={1} spacing={1}>
+              <Input
+                size="xs"
+                type="password"
+                placeholder="value (held in memory for this session)"
+                value={drafts[integration.envVar] ?? ''}
+                onChange={(e) => setDrafts((d) => ({ ...d, [integration.envVar]: e.target.value }))}
+              />
+              <Button
+                size="xs"
+                isDisabled={!drafts[integration.envVar]}
+                onClick={() => {
+                  const value = drafts[integration.envVar];
+                  if (value) {
+                    onSetSecret(integration.envVar, value);
+                    setDrafts((d) => ({ ...d, [integration.envVar]: '' }));
+                  }
+                }}
+              >
+                Set
+              </Button>
+            </HStack>
           </Box>
         ))}
       </VStack>
+
+      <Box mt={4}>
+        <Text fontSize="xs" fontWeight="semibold" textTransform="uppercase" color="gray.500" mb={1}>
+          AI provider (agent blocks)
+        </Text>
+        <Text fontSize="xs" color="gray.400" mb={1}>
+          Keys are held for this session and persisted to the OS keychain inside the app.
+        </Text>
+        <VStack align="stretch" spacing={1}>
+          <Select
+            size="xs"
+            value={provider}
+            onChange={(e) => setProvider(e.target.value as 'openai' | 'anthropic')}
+          >
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+          </Select>
+          <HStack spacing={1}>
+            <Input
+              size="xs"
+              type="password"
+              placeholder={provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'}
+              value={aiKey}
+              onChange={(e) => setAiKey(e.target.value)}
+            />
+            <Button
+              size="xs"
+              isDisabled={!aiKey}
+              onClick={() => {
+                onSetSecret(provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY', aiKey);
+                setAiKey('');
+              }}
+            >
+              Set
+            </Button>
+          </HStack>
+        </VStack>
+      </Box>
     </Box>
   );
 }

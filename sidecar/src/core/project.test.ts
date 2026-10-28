@@ -13,7 +13,7 @@ describe('loadProject', () => {
 
     const notebook = project.model.notebooks[0];
     expect(notebook.name).toBe('Hello');
-    expect(notebook.blocks.map((b) => b.type)).toEqual(['markdown', 'code', 'code']);
+    expect(notebook.blocks.map((b) => b.type)).toEqual(['markdown', 'code', 'code', 'code']);
 
     const codeBlock = notebook.blocks[1];
     expect(codeBlock.isExecutable).toBe(true);

@@ -30,4 +30,8 @@ self.MonacoEnvironment = {
 
 loader.config({ monaco });
 
+// Exposed for E2E tests and diagnostics: lets tests drive the same model the
+// components bind to instead of depending on hidden-input keyboard focus.
+(window as unknown as { monaco: typeof monaco }).monaco = monaco;
+
 export { loader };

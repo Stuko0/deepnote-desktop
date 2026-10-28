@@ -10,7 +10,8 @@
       "frontend/wailsjs",
       "frontend/dist",
       "test-fixtures/snapshots",
-      "graphify-out"
+      "graphify-out",
+      "e2e/test-results"
     ]
   },
   "linter": {

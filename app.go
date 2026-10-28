@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/zalando/go-keyring"
 )
 
 // SidecarInfo tells the frontend where the local sidecar listens and which
@@ -114,6 +117,32 @@ func (a *App) startSidecar() error {
 // GetSidecarInfo is called by the frontend to discover the local sidecar.
 func (a *App) GetSidecarInfo() SidecarInfo {
 	return a.info
+}
+
+const keyringService = "deepnote-desktop"
+
+// SetSecret stores an integration secret in the OS keychain (libsecret on
+// Linux, Credential Manager on Windows, Keychain on macOS).
+func (a *App) SetSecret(envVar string, value string) error {
+	if value == "" {
+		return keyring.Delete(keyringService, envVar)
+	}
+	return keyring.Set(keyringService, envVar, value)
+}
+
+// GetSecret reads a stored integration secret. Returns an empty string when
+// the entry does not exist.
+func (a *App) GetSecret(envVar string) (string, error) {
+	secret, err := keyring.Get(keyringService, envVar)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return "", nil
+	}
+	return secret, err
+}
+
+// DeleteSecret removes an integration secret from the OS keychain.
+func (a *App) DeleteSecret(envVar string) error {
+	return keyring.Delete(keyringService, envVar)
 }
 
 // shutdown asks the sidecar to close orderly, then terminates it.

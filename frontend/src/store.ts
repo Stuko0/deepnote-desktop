@@ -12,6 +12,7 @@ import type {
   ProjectModel,
   ServerMessage,
 } from './protocol';
+import { hasKeyring, keyringGet, keyringSet } from './wailsSecrets';
 import { type SidecarConnection, connectSidecar } from './ws';
 
 export interface BlockRuntimeState {
@@ -19,6 +20,9 @@ export interface BlockRuntimeState {
   success?: boolean;
   durationMs?: number;
   outputs: IOutput[];
+  /** Accumulated agent streaming text (phase 4). */
+  agentText?: string;
+  agentTools?: string[];
 }
 
 interface AppState {
@@ -35,7 +39,24 @@ interface AppState {
   dag: DagModel | null;
   fs: { subpath: string; entries: FileEntryModel[] } | null;
   integrations: IntegrationStatusModel[];
+  terminals: string[];
   paletteOpen: boolean;
+  dagOpen: boolean;
+  cloud: {
+    configured?: boolean;
+    baseUrl?: string;
+    workspace?: { name: string; slug?: string };
+    error?: string;
+    running: boolean;
+    log?: string;
+    run?: {
+      runId: string;
+      status: string;
+      success: boolean;
+      error?: string;
+      snapshotSaved?: boolean;
+    };
+  };
   saveState: 'saved' | 'saving' | 'error';
 
   init: (url: string, token: string) => void;
@@ -58,6 +79,11 @@ interface AppState {
   refreshDag: () => void;
   refreshFs: (subpath?: string) => void;
   refreshIntegrations: () => void;
+  cloudStatus: () => void;
+  cloudRun: () => void;
+  refreshTerminals: () => void;
+  createTerminal: () => Promise<void>;
+  setSecret: (envVar: string, value: string | null) => void;
 }
 
 let connection: SidecarConnection | null = null;
@@ -105,7 +131,35 @@ function reduceMessage(state: AppState, message: ServerMessage): Partial<AppStat
       return {
         blockState: {
           ...state.blockState,
-          [blockId]: { ...state.blockState[blockId], running: true, outputs: [] },
+          [blockId]: {
+            ...state.blockState[blockId],
+            running: true,
+            outputs: [],
+            agentText: '',
+            agentTools: [],
+          },
+        },
+      };
+    }
+    case 'agent:event': {
+      // Streaming lands on the block that is currently running.
+      const runningId = Object.entries(state.blockState).find(([, s]) => s.running)?.[0];
+      if (!runningId) return null;
+      const current = state.blockState[runningId] ?? { running: true, outputs: [] };
+      const event = message.payload.event;
+      let agentText = current.agentText ?? '';
+      let agentTools = current.agentTools ?? [];
+      if (event.type === 'text_delta' || event.type === 'reasoning_delta') {
+        agentText += event.text;
+      } else if (event.type === 'tool_called') {
+        agentTools = [...agentTools, `using ${event.toolName}`];
+      } else if (event.type === 'tool_output') {
+        agentTools = [...agentTools, `${event.toolName}: ${event.output.slice(0, 120)}`];
+      }
+      return {
+        blockState: {
+          ...state.blockState,
+          [runningId]: { ...current, agentText, agentTools },
         },
       };
     }
@@ -131,8 +185,9 @@ function reduceMessage(state: AppState, message: ServerMessage): Partial<AppStat
     }
     case 'exec:done': {
       const s: ExecutionSummary = message.payload.summary;
+      const category = s.failureCategory ? ` (${s.failureCategory})` : '';
       return {
-        lastSummary: `${s.executedBlocks}/${s.totalBlocks} blocks, ${s.failedBlocks} failed, ${s.totalDurationMs} ms`,
+        lastSummary: `${s.executedBlocks}/${s.totalBlocks} blocks, ${s.failedBlocks} failed${category}, ${s.totalDurationMs} ms`,
       };
     }
     case 'exec:error':
@@ -143,8 +198,41 @@ function reduceMessage(state: AppState, message: ServerMessage): Partial<AppStat
         : { error: message.payload.error ?? null };
     case 'fs:data':
       return { fs: { subpath: message.payload.subpath, entries: message.payload.entries } };
-    case 'integrations:data':
-      return { integrations: message.payload.integrations };
+    case 'integrations:data': {
+      const integrations = message.payload.integrations;
+      // Inside Wails: hydrate the sidecar with secrets stored in the OS keychain.
+      if (hasKeyring()) {
+        void (async () => {
+          for (const integration of integrations) {
+            const stored = await keyringGet(integration.envVar);
+            if (stored)
+              connection?.send('secrets:set', { envVar: integration.envVar, value: stored });
+          }
+        })();
+      }
+      return { integrations };
+    }
+    case 'terminals:data':
+      return { terminals: message.payload.terminals };
+    case 'cloud:data': {
+      const p = message.payload;
+      if (p.kind === 'status') {
+        return {
+          cloud: {
+            ...state.cloud,
+            running: false,
+            configured: p.configured,
+            baseUrl: p.baseUrl,
+            workspace: p.workspace,
+            error: p.error,
+          },
+        };
+      }
+      if (p.log) return { cloud: { ...state.cloud, running: true, log: `cloud run: ${p.log}` } };
+      return {
+        cloud: { ...state.cloud, running: false, run: p.run, error: p.run?.error, log: undefined },
+      };
+    }
     default:
       return null;
   }
@@ -163,7 +251,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   dag: null,
   fs: null,
   integrations: [],
+  terminals: [],
   paletteOpen: false,
+  dagOpen: false,
+  cloud: { running: false },
   saveState: 'saved',
 
   init(url: string, token: string): void {
@@ -277,6 +368,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const notebookId = get().selectedNotebookId;
     if (!notebookId) return;
     connection?.send('dag:get', { notebookId });
+    // The analyzer runs python per call; retry once if the reply never lands.
+    const requestKey = notebookId;
+    setTimeout(() => {
+      const state = get();
+      if (state.dagOpen && !state.dag && state.selectedNotebookId === requestKey) {
+        connection?.send('dag:get', { notebookId: requestKey });
+      }
+    }, 4000);
   },
 
   refreshFs(subpath?: string): void {
@@ -285,6 +384,33 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   refreshIntegrations(): void {
     connection?.send('integrations:get');
+  },
+
+  cloudStatus(): void {
+    connection?.send('cloud:status');
+  },
+
+  cloudRun(): void {
+    const notebookId = get().selectedNotebookId;
+    if (!notebookId) return;
+    set({ cloud: { ...get().cloud, running: true, error: undefined, log: 'triggering...' } });
+    connection?.send('cloud:run', { notebookId });
+  },
+
+  refreshTerminals(): void {
+    connection?.send('terminal:list');
+  },
+
+  async createTerminal(): Promise<void> {
+    connection?.send('terminal:create');
+  },
+
+  setSecret(envVar: string, value: string | null): void {
+    connection?.send('secrets:set', { envVar, value });
+    if (hasKeyring()) {
+      if (value === null) void keyringSet(envVar, '');
+      else void keyringSet(envVar, value);
+    }
   },
 }));
 
